@@ -49,6 +49,10 @@ CHART_FILENAME   = "F1_file_coverage_chart.png"
 README_FILENAME  = "README_eda01_intake.txt"
 TAR_PEEK_MEMBERS = 20          # members peeked during tar smoke test
 
+# Full set of corrected daily-archive dates from the official OpTC catalog.
+# Used to detect gaps and avoid implying continuous temporal coverage.
+_CORRECTED_CATALOG_DATES = [f"2019-09-{d:02d}" for d in range(16, 26)]
+
 
 # ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ──
 # CLI ARGUMENT PARSING
@@ -365,11 +369,11 @@ def build_ledger(
             "date_label"                           : date_label,
             "file_size_mb"                         : size_mb,
             "included_yes_no"                      : included,
-            "exclusion_reason"                     : excl_reason,
+            "exclusion_reason"                     : excl_reason or "none",
             "parser_name"                          : parser_name,
             "parse_status"                         : parse_status,
             "checksum_if_available"                : checksum,
-            "manual_review_note"                   : "",
+            "manual_review_note"                   : "not_applicable",
         })
 
     if not records:
@@ -398,12 +402,40 @@ def build_scope_table(
         known_dates = sorted(
             ledger.loc[ledger["date_label"] != "unknown", "date_label"].unique().tolist()
         )
-        date_val = (f"{known_dates[0]} — {known_dates[-1]}"
-                    if len(known_dates) > 1 else
-                    known_dates[0] if known_dates else
-                    "unknown — no date tokens found")
+        # Intersect with the known corrected catalog to identify what is
+        # available vs what is still pending download.
+        available_dates = [d for d in known_dates if d in _CORRECTED_CATALOG_DATES]
+        pending_dates   = [d for d in _CORRECTED_CATALOG_DATES if d not in known_dates]
+
+        if available_dates:
+            avail_str = ", ".join(available_dates)
+            catalog_start = _CORRECTED_CATALOG_DATES[0]
+            catalog_end   = _CORRECTED_CATALOG_DATES[-1]
+            date_val = (
+                f"available corrected archive dates: {avail_str}; "
+                f"corrected catalog range under intake plan: "
+                f"{catalog_start} through {catalog_end}"
+            )
+        else:
+            date_val = "unknown — no corrected catalog dates found in scanned files"
+
+        if pending_dates:
+            date_limitation = (
+                "continuous temporal coverage not yet achieved; "
+                f"missing corrected archives remain pending download: "
+                f"{', '.join(pending_dates)}"
+            )
+        else:
+            date_limitation = (
+                "all corrected catalog dates accounted for in this scan; "
+                "verify archive contents before claiming full temporal coverage"
+            )
     else:
-        date_val = "unknown — no date tokens found"
+        date_val       = "unknown — no date tokens found"
+        date_limitation = (
+            "continuous temporal coverage not yet achieved; "
+            "missing corrected archives remain pending download"
+        )
 
     if has_data:
         src_types = sorted(ledger["source_type"].unique().tolist())
@@ -426,14 +458,25 @@ def build_scope_table(
             "scope_item"    : "date_range",
             "selected_value": date_val,
             "reason"        : "Inferred from folder/filename tokens during intake scan",
-            "limitation"    : "Date inferred from path tokens; manual verification recommended",
+            "limitation"    : date_limitation,
         },
         {
             "scope_item"    : "event_sources",
-            "selected_value": ("daily_archive; internal endpoint/network/source "
-                               "files not extracted yet"),
-            "reason"        : "Archive not extracted at EDA-01 level; internal file types catalogued in EDA-02",
-            "limitation"    : "Source type breakdown requires extraction; deferred to EDA-02",
+            "selected_value": (
+                "archive-level daily tar files; "
+                "detailed row-level source profiling deferred to EDA 2; "
+                "lightweight tar-member coverage may be computed in EDA 1 "
+                "without full extraction"
+            ),
+            "reason"        : (
+                "Archive not extracted at EDA-01 level; "
+                "tar member names can be inspected for source classification "
+                "using eda_01_master_archive_inventory.py --estimate-extracted-size"
+            ),
+            "limitation"    : (
+                "Row-level source breakdown and field-level profiling "
+                "require extraction; deferred to EDA-02"
+            ),
         },
         {
             "scope_item"    : "ground_truth_source",
