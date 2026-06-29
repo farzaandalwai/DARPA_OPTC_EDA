@@ -267,9 +267,14 @@ def build_inventory(
         compressed_label = f"{catalog_gb} GB (official catalog)"
         print(f"  {filename}", end="")
 
+        # Determine location label for Notes based on the path prefix
+        _in_drive = str(corrected_dir).startswith("/content/drive/")
+        _exist_label = "file_exists_in_google_drive" if _in_drive else "file_exists_in_configured_dir"
+        _path_label  = "drive_path"                  if _in_drive else "dir_path"
+
         if local_exists:
             local_mb = round(filepath.stat().st_size / (1024 ** 2), 1)
-            print(f"  [{local_mb} MB locally]")
+            print(f"  [{local_mb} MB]")
 
             # Smoke test
             if do_smoke:
@@ -286,7 +291,7 @@ def build_inventory(
                 est_extracted = f"{round(raw_bytes / (1024**3), 2)} GB (from tar member metadata)"
                 print(f"done  ({raw_bytes // (1024**2)} MB estimated)")
             else:
-                coverage      = "not_computed_estimate_disabled"
+                coverage      = "pending_member_coverage_scan"
                 gt_overlap    = "unknown_pending_ground_truth_alignment"
                 est_extracted = "not_computed_estimate_disabled"
 
@@ -299,11 +304,12 @@ def build_inventory(
                 checksum_status = "not_computed_checksum_disabled"
 
             notes = (
-                f"file_exists_locally; "
-                f"local_path={filepath}; "
+                f"{_exist_label}; "
+                f"{_path_label}={filepath}; "
                 f"local_size={local_mb} MB; "
                 f"archive_not_extracted"
             )
+            storage_prio = storage_priority(catalog_gb)
 
         else:
             print("  [NOT DOWNLOADED]")
@@ -313,6 +319,7 @@ def build_inventory(
             coverage        = "pending_not_downloaded"
             gt_overlap      = "unknown_pending_ground_truth_alignment"
             notes           = "file_not_downloaded; archive_not_extracted"
+            storage_prio    = "pending_download_if_storage_allows"
 
         rows.append({
             "Archive Date"            : archive_date,
@@ -323,9 +330,9 @@ def build_inventory(
             "Tar Smoke-Test Status"   : smoke_status,
             "File Coverage Summary"   : coverage,
             "Ground-Truth Overlap"    : gt_overlap,
-            "Benign Candidate"        : "candidate_only_needs_gt_review",
-            "Attack Candidate"        : "candidate_only_needs_gt_review",
-            "Storage Priority"        : storage_priority(catalog_gb),
+            "Benign Candidate"        : "not_assessed_eda1",
+            "Attack Candidate"        : "not_assessed_eda1",
+            "Storage Priority"        : storage_prio,
             "Processing Priority"     : "pending_scientific_selection",
             "Notes"                   : notes,
         })

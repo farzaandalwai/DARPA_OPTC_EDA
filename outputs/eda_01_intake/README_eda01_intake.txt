@@ -171,3 +171,52 @@ STORAGE NOTE
   of available disk space vs total corrected-archive catalog size.
 
 =================================================================
+
+=================================================================
+  MASTER ARCHIVE INVENTORY EXPANSION
+  Added by eda_01_master_archive_inventory.py  —  2026-06-28 23:34:19
+=================================================================
+
+  EDA 1 has moved from single-archive validation to a broad
+  corrected-archive inventory covering all 10 official OpTC
+  daily archives (2019-09-16 through 2019-09-25).
+
+-----------------------------------------------------------------
+WHAT CHANGED
+-----------------------------------------------------------------
+
+  T1B_master_archive_inventory.csv lists all 10 corrected archives.
+  Archives that have been downloaded receive (if flags were passed):
+    - SHA-256 checksum (streaming, no full load)
+    - Tar smoke test (peek at 20 member names)
+    - File coverage summary (all members classified by path keyword)
+    - Estimated extracted size (sum of tar member metadata sizes)
+  Archives not yet downloaded are listed with pending placeholders.
+
+-----------------------------------------------------------------
+WHAT HAS NOT BEEN DONE
+-----------------------------------------------------------------
+
+  - No archive has been fully extracted
+  - No event rows have been read or counted
+  - No event-level statistics have been computed
+  - No attack or benign claims have been made
+  - No MITRE labels have been assigned
+  - Final modeling dates have not been selected
+    (Processing Priority = pending_scientific_selection for all)
+
+-----------------------------------------------------------------
+BENIGN / ATTACK CANDIDATE COLUMNS
+-----------------------------------------------------------------
+
+  Both columns contain "candidate_only_needs_gt_review" for
+  every archive. This is an intake placeholder, not a verified
+  classification. Ground-truth alignment is deferred to EDA-02.
+
+-----------------------------------------------------------------
+STORAGE NOTE
+-----------------------------------------------------------------
+
+  See S1_storage_feasibility_report.txt for the full assessment.
+
+=================================================================
