@@ -1,0 +1,78 @@
+=================================================================
+  DARPA OpTC — EDA 1: Storage Feasibility Report
+  Generated : 2026-06-28 12:37:47
+=================================================================
+
+-----------------------------------------------------------------
+LOCAL FILESYSTEM
+-----------------------------------------------------------------
+
+  Filesystem root assessed : /Users/farzu/Desktop/DARPA_OPTC_EDA
+  Total disk capacity      : 460.4 GB
+  Used                     : 329.3 GB
+  Available                : 131.1 GB
+
+-----------------------------------------------------------------
+OFFICIAL CORRECTED-ARCHIVE CATALOG
+-----------------------------------------------------------------
+
+  [LOCAL]  2019-09-16.tar            12.5 GB
+  [PENDING]  2019-09-17.tar            87.2 GB
+  [PENDING]  2019-09-18.tar            64.9 GB
+  [PENDING]  2019-09-19.tar           116.0 GB
+  [PENDING]  2019-09-20.tar            83.7 GB
+  [PENDING]  2019-09-21.tar           115.3 GB
+  [PENDING]  2019-09-22.tar           115.8 GB
+  [PENDING]  2019-09-23.tar           112.0 GB
+  [PENDING]  2019-09-24.tar           104.3 GB
+  [PENDING]  2019-09-25.tar            63.1 GB
+
+  Total official catalog size  : 874.8 GB
+
+-----------------------------------------------------------------
+LOCAL ARCHIVE STATUS
+-----------------------------------------------------------------
+
+  Archives downloaded locally  : 1 / 10
+  Local archive storage used   : 12.5 GB
+  Remaining catalog to download: 862.3 GB
+
+-----------------------------------------------------------------
+STORAGE FEASIBILITY ASSESSMENT
+-----------------------------------------------------------------
+
+  STATUS : INSUFFICIENT STORAGE
+  WARNING: Available disk space is 131.1 GB.
+  Remaining archives require 862.3 GB.
+  Shortfall: 731.2 GB.
+
+  Options:
+    1. Free disk space before downloading remaining archives.
+    2. Download a subset of archives (see Storage Priority column
+       in T1B_master_archive_inventory.csv).
+    3. Use external storage for the larger archives.
+
+-----------------------------------------------------------------
+ESTIMATED EXTRACTED SIZE NOTES
+-----------------------------------------------------------------
+
+  Estimated extracted sizes are computed from tar member metadata
+  (sum of member.size) without extracting any file contents.
+  This method is accurate for uncompressed tar archives.
+  For .tar.gz archives the actual extracted size may differ.
+
+  Archives not yet downloaded show 'pending_not_downloaded'
+  in the Estimated Extracted Size column of T1B.
+
+-----------------------------------------------------------------
+SCOPE LIMITATIONS
+-----------------------------------------------------------------
+
+  - No archive was extracted
+  - No event-level statistics computed
+  - No attack analysis performed
+  - No MITRE labels assigned
+  - Benign / Attack Candidate columns are intake placeholders only
+  - Processing Priority deferred to scientific selection phase
+
+=================================================================

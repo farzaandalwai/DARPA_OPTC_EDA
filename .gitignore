@@ -1,0 +1,36 @@
+# ── Raw data — never commit archives or extracted data ──────────────
+data/*
+!data/
+!data/README_data.md
+*.tar
+*.tar.*
+*.gz
+*.json.gz
+*.aria2
+*.parquet
+*.duckdb
+
+# ── Python artefacts ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.ipynb_checkpoints/
+
+# ── OS / editor ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.env
+.venv/
+venv/
+env/
+
+# ── Tool caches ──────────────────────────────────────────────────────
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# Local Python environments
+.venv/
+venv/
+env/

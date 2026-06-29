@@ -1,0 +1,7 @@
+"scope_item","selected_value","reason","limitation"
+"dataset_version","corrected","Avoid mixing original and corrected OpTC files unless explicitly justified","Files marked unknown_review_needed require manual review; set SELECTED_DATASET_VERSION = 'review_all' to bypass filter"
+"date_range","2019-09-16","Inferred from folder/filename tokens; current intake covers 2019-09-16 archive only","Date inferred from path tokens; manual verification recommended"
+"event_sources","daily_archive; internal endpoint/network/source files not extracted yet","Archive not extracted at EDA-01 level; internal file types catalogued in EDA-02","Source type breakdown requires extraction; deferred to EDA-02"
+"ground_truth_source","not detected in scanned files","Ground-truth detected by keyword matching; not included in 2019-09-16 archive scan","Ground-truth files identified by keyword matching only; content not validated in EDA-01"
+"host_subset","not selected at EDA-01 archive level","Host-level selection requires extraction; not applicable to .tar intake","Host-level filtering deferred to later EDA phases"
+"sampling_rule","no sampling; tar smoke test reads only first 20 archive members for readability verification","EDA-01 is an intake scan; no rows are sampled or dropped","Row-level sampling rules deferred to later EDA phases"
