@@ -1,2 +1,3 @@
 "file_id","file_name","folder_path","dataset_version_original_or_corrected","source_type","date_label","file_size_mb","included_yes_no","exclusion_reason","parser_name","parse_status","checksum_if_available","manual_review_note"
-"1","2019-09-16.tar","/private/tmp/optc_test_data","unknown_review_needed","daily_archive","2019-09-16","0.0","no","empty_file_zero_bytes","tar_smoke_parser","not_run_smoke_test_disabled","not_computed_checksum_disabled","not_applicable"
+"1","2019-09-16.tar","/Users/farzu/Desktop/DARPA_OPTC_EDA/data/corrected","corrected","daily_archive","2019-09-16","12815.0977","yes","","tar_smoke_parser","tar_open_success","4f6cf98279024b2712aecede081a0b59895d9eeab5835f6318f81ff7ef9ed069",""
+ 
