@@ -209,6 +209,7 @@ def stream_events(
     archive_path: pathlib.Path,
     max_members: Optional[int] = None,
     max_events: Optional[int] = None,
+    max_events_per_member: Optional[int] = None,
     member_name_contains: Optional[str] = None,
     quiet: bool = False,
 ) -> Iterator[dict]:
@@ -222,11 +223,13 @@ def stream_events(
 
     Parameters
     ----------
-    archive_path        : path to the .tar file
-    max_members         : stop after this many matching members (None = all)
-    max_events          : stop after this many total events (None = unlimited)
-    member_name_contains: skip members whose name does not contain this string
-    quiet               : suppress progress prints
+    archive_path          : path to the .tar file
+    max_members           : stop after this many matching members (None = all)
+    max_events            : global cap on total events yielded (None = unlimited)
+    max_events_per_member : cap per individual member; ensures coverage across
+                            multiple members instead of exhausting one (None = unlimited)
+    member_name_contains  : skip members whose name does not contain this string
+    quiet                 : suppress progress prints
     """
     archive_path = pathlib.Path(archive_path)
     archive_name = archive_path.name
@@ -287,6 +290,8 @@ def stream_events(
                 continue
 
             bio = io.BytesIO(raw_bytes)
+            member_event_count = 0   # per-member counter for max_events_per_member
+
             try:
                 reader: io.TextIOBase
                 if is_jsonl_gz:
@@ -300,7 +305,20 @@ def stream_events(
                         if not stripped:
                             continue
 
-                        # max_events guard
+                        # Per-member cap — break to next member, not return
+                        if (max_events_per_member is not None
+                                and member_event_count >= max_events_per_member):
+                            if not quiet:
+                                print(
+                                    f"    [PARSER] max_events_per_member="
+                                    f"{max_events_per_member} reached for "
+                                    f"{pathlib.Path(member.name).name}; "
+                                    "moving to next member.",
+                                    file=sys.stderr,
+                                )
+                            break
+
+                        # Global cap — stop entirely
                         if max_events is not None and total_events >= max_events:
                             if not quiet:
                                 print(f"  [PARSER] max_events={max_events} reached; stopping.",
@@ -314,6 +332,7 @@ def stream_events(
                                 continue
                         except json.JSONDecodeError as exc:
                             parse_errors += 1
+                            member_event_count += 1
                             yield _error_record(
                                 archive_name, member.name, line_num,
                                 total_events + 1, stripped, str(exc), source_type,
@@ -321,6 +340,7 @@ def stream_events(
                             continue
 
                         total_events += 1
+                        member_event_count += 1
                         yield normalize_event(
                             raw, archive_name, member.name,
                             line_num, total_events, source_type,
@@ -346,12 +366,14 @@ def stream_from_archives(
     archive_paths: list,
     max_members: Optional[int] = None,
     max_events: Optional[int] = None,
+    max_events_per_member: Optional[int] = None,
     member_name_contains: Optional[str] = None,
     quiet: bool = False,
 ) -> Iterator[dict]:
     """
     Stream events from multiple .tar archives.
     max_events is a global cap across all archives.
+    max_events_per_member limits events from each individual member.
     """
     total = 0
     for archive_path in archive_paths:
@@ -362,6 +384,7 @@ def stream_from_archives(
             pathlib.Path(archive_path),
             max_members=max_members,
             max_events=per_archive_cap,
+            max_events_per_member=max_events_per_member,
             member_name_contains=member_name_contains,
             quiet=quiet,
         ):
@@ -384,6 +407,8 @@ def _parse_cli_args() -> argparse.Namespace:
                    help="Max members to scan per archive (default: 5)")
     p.add_argument("--max-events", type=int, default=500,
                    help="Max total events to yield (default: 500)")
+    p.add_argument("--max-events-per-member", type=int, default=None,
+                   help="Max events per tar member; ensures coverage across members")
     p.add_argument("--member-name-contains", default=None,
                    help="Only process members whose name contains this string")
     p.add_argument("--output-csv", default=None,
@@ -400,6 +425,7 @@ def main() -> None:
         archive_paths,
         max_members=args.max_members,
         max_events=args.max_events,
+        max_events_per_member=args.max_events_per_member,
         member_name_contains=args.member_name_contains,
         quiet=False,
     ))

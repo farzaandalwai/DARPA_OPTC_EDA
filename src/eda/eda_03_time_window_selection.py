@@ -89,6 +89,7 @@ def collect_events_df(
     archive_paths: list,
     max_members: Optional[int],
     max_events: Optional[int],
+    max_events_per_member: Optional[int],
     member_name_contains: Optional[str],
 ):
     """
@@ -101,6 +102,7 @@ def collect_events_df(
         archive_paths,
         max_members=max_members,
         max_events=max_events,
+        max_events_per_member=max_events_per_member,
         member_name_contains=member_name_contains,
         quiet=False,
     ))
@@ -118,7 +120,48 @@ def collect_events_df(
     print(f"  [INFO] {total_raw:,} events total; {n_parseable:,} with parseable timestamps "
           f"({n_parseable/max(total_raw,1)*100:.1f}%)")
 
-    return df, total_raw, n_parseable
+    return df, total_raw, n_parseable, events
+
+
+# ── Pilot sampling summary ────────────────────────────────────────────────
+
+def _collection_summary(events: list, max_members: int) -> tuple:
+    """Returns (summary_dict, summary_text)."""
+    import collections
+    ok_events   = [e for e in events if e.get("parse_status") == "ok"]
+    member_ctr  = collections.Counter(e.get("member_name", "") for e in events)
+    archive_ctr = collections.Counter(e.get("archive_name", "") for e in events)
+    src_ctr     = collections.Counter(e.get("source_type", "unknown") for e in ok_events)
+
+    lines = [
+        "",
+        "=" * 56,
+        "PILOT SAMPLING SUMMARY",
+        "=" * 56,
+        f"  Total events collected       : {len(events):,}",
+        f"  OK / parse-error events      : {len(ok_events):,} / {len(events)-len(ok_events):,}",
+        f"  Tar members with events      : {len(member_ctr)} (max_members={max_members})",
+        f"  Archives with events         : {len(archive_ctr)}",
+        "",
+        "  Source type counts:",
+    ]
+    for src, cnt in sorted(src_ctr.items()):
+        lines.append(f"    {src:<30s}: {cnt:,}")
+    lines += ["", "  Events per member (top 10):"]
+    for member, cnt in member_ctr.most_common(10):
+        short = pathlib.Path(member).name[:60]
+        lines.append(f"    {short}: {cnt:,}")
+    lines.append("=" * 56)
+
+    text = "\n".join(lines)
+    print(text, flush=True)
+
+    stats = {
+        "total": len(events), "ok": len(ok_events),
+        "n_members": len(member_ctr), "n_archives": len(archive_ctr),
+        "src_counts": dict(src_ctr), "top_members": member_ctr.most_common(10),
+    }
+    return stats, text
 
 
 # ── T5: Window Size Comparison ────────────────────────────────────────────
@@ -152,10 +195,12 @@ def compute_t5(df, pilot_label: str) -> list:
             mean_ev    = round(float(non_empty.mean())     if len(non_empty) else 0.0, 1)
 
             # Per-window unique entity counts
+            # Replace empty strings with NaN so resample().nunique() ignores them
             entity_stats = {}
             for label, col in _ENTITY_COLS.items():
                 if col in ts_df.columns:
-                    windowed = ts_df[col].resample(freq).agg(lambda s: s[s != ""].nunique())
+                    col_clean = ts_df[col].replace("", float("nan"))
+                    windowed = col_clean.resample(freq).nunique()
                     non_empty_windows = windowed[windowed > 0]
                     entity_stats[label] = round(float(np.median(non_empty_windows))
                                                 if len(non_empty_windows) else 0.0, 1)
@@ -345,7 +390,7 @@ def plot_f4(df, out_dir: pathlib.Path, figures_dir: pathlib.Path,
 
 def write_n1(t5_rows: list, out_dir: pathlib.Path, pilot_label: str,
              n_events: int, n_parseable: int, ts_rule: str) -> None:
-    now = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     primary_row  = next((r for r in t5_rows if r.get("recommendation_primary_backup_no") == "primary"), None)
     backup_row   = next((r for r in t5_rows if r.get("recommendation_primary_backup_no") == "backup"), None)
     primary_ws   = primary_row["window_size"]  if primary_row else "review_needed"
@@ -429,8 +474,9 @@ def write_readme(
     primary_ws: str,
     backup_ws: str,
     ts_rule: str,
+    member_summary: str = "",
 ) -> None:
-    now = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [
         "EDA 3 — Time Alignment and Window Selection",
         "=" * 50,
@@ -450,6 +496,7 @@ def write_readme(
         f"  archives processed     : {getattr(args, 'archives', 'all')}",
         f"  max-members per archive: {args.max_members}",
         f"  max-events total       : {args.max_events}",
+        f"  max-events-per-member  : {args.max_events_per_member}",
         f"  member-name-contains   : {args.member_name_contains}",
         "",
         "Timestamp conversion rule",
@@ -478,11 +525,15 @@ def write_readme(
         "",
         "Important limitations",
         "----------------------",
-        f"  * Pilot sample only — {n_events:,} events, ≤{args.max_members} members/archive.",
+        f"  * Pilot sample only — {n_events:,} events, ≤{args.max_members} members/archive "
+        f"(max {args.max_events_per_member} events/member).",
         "  * Window statistics may shift with larger samples.",
         "  * Gradual drift analysis requires more archives (2019-09-19 through 2019-09-24 pending).",
         "  * Ground-truth alignment and attack-interval annotation are deferred to EDA 10.",
     ]
+    if member_summary:
+        lines += ["", "Pilot sampling detail", "---------------------"]
+        lines += [f"  {ln}" for ln in member_summary.strip().splitlines()]
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "README_eda03_time_alignment.txt").write_text("\n".join(lines), encoding="utf-8")
     print(f"  [README] {out_dir / 'README_eda03_time_alignment.txt'}")
@@ -507,6 +558,9 @@ def parse_args() -> argparse.Namespace:
                    help="Max members to scan per archive (default: 25)")
     p.add_argument("--max-events", type=int, default=50_000,
                    help="Max total events across all archives (default: 50000)")
+    p.add_argument("--max-events-per-member", type=int, default=2000,
+                   help="Max events per tar member; ensures balanced coverage across "
+                        "members instead of exhausting the first one (default: 2000)")
     p.add_argument("--member-name-contains", default=None,
                    help="Filter: only process members whose name contains this string")
     return p.parse_args()
@@ -553,7 +607,9 @@ def main() -> None:
 
     # Pilot label
     pilot_label = (
-        f"[PILOT SAMPLE: max_members={args.max_members}, max_events={args.max_events}]"
+        f"[PILOT SAMPLE: max_members={args.max_members}, "
+        f"max_events={args.max_events}, "
+        f"max_events_per_member={args.max_events_per_member}]"
         if (args.max_members or args.max_events) else "[FULL RUN]"
     )
 
@@ -566,10 +622,11 @@ def main() -> None:
 
     # ── Collect events ────────────────────────────────────────────────
     print("Streaming events ...")
-    df, n_total, n_parseable = collect_events_df(
+    df, n_total, n_parseable, raw_events = collect_events_df(
         archive_paths,
         max_members=args.max_members,
         max_events=args.max_events,
+        max_events_per_member=args.max_events_per_member,
         member_name_contains=args.member_name_contains,
     )
 
@@ -578,6 +635,9 @@ def main() -> None:
         "Strings: tried numeric first, then ISO-8601 (Z replaced with +00:00). "
         "All datetimes normalized to naive UTC."
     )
+
+    # ── Collection summary ────────────────────────────────────────────
+    _stats, _summary_text = _collection_summary(raw_events, args.max_members)
 
     if df.empty:
         print("[WARN] No events — T5/F3/F4 will be empty.", file=sys.stderr)
@@ -632,6 +692,7 @@ def main() -> None:
     write_readme(
         out_dir, args, n_total, n_parseable,
         pilot_label, primary_ws_final, backup_ws_final, ts_rule,
+        member_summary=_summary_text,
     )
 
     # ── Summary ───────────────────────────────────────────────────────

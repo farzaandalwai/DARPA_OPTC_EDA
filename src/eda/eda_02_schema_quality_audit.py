@@ -88,6 +88,49 @@ def _save_fig(fig, base_name: str, *dirs) -> None:
     print(f"  [FIG] saved {base_name}.png/.pdf to {dirs[0]}")
 
 
+# ── Pilot sampling summary ────────────────────────────────────────────────
+
+def _collection_summary(events: list, max_members: int) -> tuple:
+    """
+    Returns (summary_dict, summary_text) for printing and README inclusion.
+    """
+    ok_events   = [e for e in events if e.get("parse_status") == "ok"]
+    member_ctr  = collections.Counter(e.get("member_name", "") for e in events)
+    archive_ctr = collections.Counter(e.get("archive_name", "") for e in events)
+    src_ctr     = collections.Counter(e.get("source_type", "unknown") for e in ok_events)
+
+    lines = [
+        "",
+        "=" * 56,
+        "PILOT SAMPLING SUMMARY",
+        "=" * 56,
+        f"  Total events collected       : {len(events):,}",
+        f"  OK / parse-error events      : {len(ok_events):,} / {len(events)-len(ok_events):,}",
+        f"  Tar members with events      : {len(member_ctr)} (max_members={max_members})",
+        f"  Archives with events         : {len(archive_ctr)}",
+        "",
+        "  Source type counts:",
+    ]
+    for src, cnt in sorted(src_ctr.items()):
+        lines.append(f"    {src:<30s}: {cnt:,}")
+    lines += ["", "  Events per member (top 10):"]
+    for member, cnt in member_ctr.most_common(10):
+        short = pathlib.Path(member).name[:60]
+        lines.append(f"    {short}: {cnt:,}")
+    lines.append("=" * 56)
+
+    text = "\n".join(lines)
+    print(text, flush=True)
+
+    stats = {
+        "total": len(events), "ok": len(ok_events),
+        "n_members": len(member_ctr), "n_archives": len(archive_ctr),
+        "src_counts": dict(src_ctr),
+        "top_members": member_ctr.most_common(10),
+    }
+    return stats, text
+
+
 # ── T3: Field Reliability Audit ──────────────────────────────────────────
 
 def compute_t3(events: list, source_types: list) -> list:
@@ -366,12 +409,13 @@ def plot_f2(events: list, out_dir: pathlib.Path, figures_dir: pathlib.Path,
         print("  [F2] No parseable timestamps — skipping coverage plot.", file=sys.stderr)
         return
 
-    ts_series = pd.to_datetime(ts_ok, errors="coerce").dropna()
+    # Convert to pd.Series (not DatetimeIndex) so .dt accessor works reliably
+    ts_series = pd.to_datetime(pd.Series(ts_ok), errors="coerce").dropna()
     if ts_series.empty:
         print("  [F2] All timestamps coerced to NaT — skipping.", file=sys.stderr)
         return
 
-    # Bin by hour (or minute if span < 1 hour)
+    # Bin by hour (or 5-min if span < 1 hour)
     span_hours = (ts_series.max() - ts_series.min()).total_seconds() / 3600
     freq = "1h" if span_hours >= 1 else "5min"
     binned = ts_series.dt.floor(freq).value_counts().sort_index()
@@ -402,8 +446,9 @@ def write_readme(
     t3_rows: int,
     t4_rows: int,
     pilot_label: str,
+    member_summary: str = "",
 ) -> None:
-    now = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [
         "EDA 2 — Schema and Data-Quality Audit",
         "=" * 50,
@@ -419,16 +464,22 @@ def write_readme(
         "",
         "Run parameters",
         "--------------",
-        f"  corrected-dir         : {args.corrected_dir}",
-        f"  archives processed    : {getattr(args, 'archives', 'all')}",
+        f"  corrected-dir          : {args.corrected_dir}",
+        f"  archives processed     : {getattr(args, 'archives', 'all')}",
         f"  max-members per archive: {args.max_members}",
-        f"  max-events total      : {args.max_events}",
-        f"  member-name-contains  : {args.member_name_contains}",
+        f"  max-events total       : {args.max_events}",
+        f"  max-events-per-member  : {args.max_events_per_member}",
+        f"  member-name-contains   : {args.member_name_contains}",
         "",
         "Collected data",
         "--------------",
-        f"  events parsed         : {n_events:,}",
-        f"  members scanned (approx): {n_members_approx}",
+        f"  events parsed          : {n_events:,}",
+        f"  members with events    : {n_members_approx}",
+    ]
+    if member_summary:
+        lines += ["", "Pilot sampling detail", "---------------------"]
+        lines += [f"  {ln}" for ln in member_summary.strip().splitlines()]
+    lines += [
         "",
         "Outputs",
         "-------",
@@ -450,7 +501,8 @@ def write_readme(
         "",
         "Important limitations",
         "----------------------",
-        f"  * Pilot sample only — {n_events:,} events from up to {args.max_members} members per archive.",
+        f"  * Pilot sample only — {n_events:,} events from up to {args.max_members} members "
+        f"  (max {args.max_events_per_member} events/member).",
         "  * Schema statistics may shift when more members / archives are processed.",
         "  * Normalized field extraction is best-effort; OpTC ECAR field names vary by version.",
         "  * Ground-truth alignment and attack interval annotation are deferred to EDA 10.",
@@ -479,6 +531,9 @@ def parse_args() -> argparse.Namespace:
                    help="Max members to scan per archive (default: 25)")
     p.add_argument("--max-events", type=int, default=50_000,
                    help="Max total events across all archives (default: 50000)")
+    p.add_argument("--max-events-per-member", type=int, default=2000,
+                   help="Max events per tar member; ensures balanced coverage across "
+                        "members instead of exhausting the first one (default: 2000)")
     p.add_argument("--member-name-contains", default=None,
                    help="Filter: only process members whose name contains this string")
     return p.parse_args()
@@ -526,7 +581,9 @@ def main() -> None:
     # Pilot label
     is_pilot = (args.max_members is not None) or (args.max_events is not None)
     pilot_label = (
-        f"[PILOT SAMPLE: max_members={args.max_members}, max_events={args.max_events}]"
+        f"[PILOT SAMPLE: max_members={args.max_members}, "
+        f"max_events={args.max_events}, "
+        f"max_events_per_member={args.max_events_per_member}]"
         if is_pilot else "[FULL RUN]"
     )
     print(f"\n{'='*60}")
@@ -542,11 +599,15 @@ def main() -> None:
         archive_paths,
         max_members=args.max_members,
         max_events=args.max_events,
+        max_events_per_member=args.max_events_per_member,
         member_name_contains=args.member_name_contains,
         quiet=False,
     ))
 
     print(f"\n[INFO] {len(events):,} events collected.")
+
+    # ── Collection summary ────────────────────────────────────────────
+    _stats, _summary_text = _collection_summary(events, args.max_members)
 
     if not events:
         print("[WARN] No events parsed — T3/T4/F2 will be empty.", file=sys.stderr)
@@ -581,14 +642,14 @@ def main() -> None:
     plot_f2(events, out_dir, figures_dir, pilot_label)
 
     # ── README ────────────────────────────────────────────────────────
-    n_members = len({e.get("member_name", "") for e in events})
     write_readme(
         out_dir, args,
         n_events=len(events),
-        n_members_approx=n_members,
+        n_members_approx=_stats["n_members"],
         t3_rows=len(t3_rows),
         t4_rows=len(t4_rows_data),
         pilot_label=pilot_label,
+        member_summary=_summary_text,
     )
 
     # ── Summary ───────────────────────────────────────────────────────
