@@ -151,7 +151,8 @@ DARPA_OPTC_EDA/
 │       ├── eda_01_master_archive_inventory.py
 │       ├── eda_02_schema_quality_audit.py
 │       ├── eda_03_time_window_selection.py
-│       └── build_pilot_member_inventory.py  ← pilot-subset stage 1
+│       ├── build_pilot_member_inventory.py  ← pilot-subset stage 1
+│       └── select_pilot_manifest.py         ← pilot-subset stage 2 (10 GiB)
 ├── .gitignore
 ├── README.md
 └── requirements.txt
@@ -255,6 +256,29 @@ Outputs go to `outputs/pilot_selection/` (`T0_member_inventory.csv`,
 `T0_member_summary_by_date_source_host.csv`,
 `T0_ground_truth_candidate_files.csv`, `F0_member_size_by_date_source.png`,
 `README_pilot_member_inventory.txt`).
+
+---
+
+## Pilot-subset stage 2 — deterministic 10 GiB manifest
+
+Selects a reproducible endpoint-focused pilot subset (~9–10 GiB) from
+`T0_member_inventory.csv`. Hosts that span the most archive dates are
+preferred. No extraction; no attack/benign/MITRE labels.
+
+```bash
+python3 src/eda/select_pilot_manifest.py \
+  --project-root /content/DARPA_OPTC_EDA_REPO \
+  --inventory-csv outputs/pilot_selection/T0_member_inventory.csv \
+  --target-size-gib 9.5 \
+  --minimum-size-gib 9.0 \
+  --maximum-size-gib 10.0 \
+  --preferred-host-count 6 \
+  --random-seed 42
+```
+
+Primary output: `configs/pilot_manifest_10gb.csv`, plus date/host summaries,
+validation checks, and `README_pilot_manifest_10gb.txt` under
+`outputs/pilot_selection/`.
 
 ---
 
