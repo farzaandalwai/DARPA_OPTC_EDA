@@ -150,7 +150,8 @@ DARPA_OPTC_EDA/
 │       ├── eda_01_dataset_intake.py
 │       ├── eda_01_master_archive_inventory.py
 │       ├── eda_02_schema_quality_audit.py
-│       └── eda_03_time_window_selection.py
+│       ├── eda_03_time_window_selection.py
+│       └── build_pilot_member_inventory.py  ← pilot-subset stage 1
 ├── .gitignore
 ├── README.md
 └── requirements.txt
@@ -232,6 +233,28 @@ python3 src/eda/eda_03_time_window_selection.py \
 | `outputs/eda_03_time/F4_entity_diversity_over_time.png` | Unique hosts/processes/destinations per window |
 | `outputs/eda_03_time/N1_window_recommendation_note.txt` | Primary and backup window recommendation with rationale |
 | `outputs/eda_03_time/README_eda03_time_alignment.txt` | Run metadata and limitation notes |
+
+---
+
+## Pilot-subset stage 1 — tar member inventory
+
+Enumerates every internal member of the corrected `.tar` archives from tar
+headers (no extraction) and lightly samples the first lines of each
+`.json.gz` member. Output feeds the later selection of a fixed 5–10 GB
+pilot manifest — it does not select the subset itself.
+
+```bash
+python3 src/eda/build_pilot_member_inventory.py \
+  --project-root /content/DARPA_OPTC_EDA_REPO \
+  --corrected-dir /content/drive/MyDrive/DARPA_OPTC_EDA/corrected_archives \
+  --archives 2019-09-16.tar \
+  --sample-lines-per-member 20
+```
+
+Outputs go to `outputs/pilot_selection/` (`T0_member_inventory.csv`,
+`T0_member_summary_by_date_source_host.csv`,
+`T0_ground_truth_candidate_files.csv`, `F0_member_size_by_date_source.png`,
+`README_pilot_member_inventory.txt`).
 
 ---
 
