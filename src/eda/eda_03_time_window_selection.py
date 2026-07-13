@@ -548,8 +548,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--project-root", default=None,
                    help="Project root directory (default: cwd)")
-    p.add_argument("--corrected-dir", required=True,
-                   help="Directory containing corrected .tar archives")
+    p.add_argument("--corrected-dir", default=None,
+                   help="Directory containing corrected .tar archives (legacy mode)")
     p.add_argument("--archives", nargs="+", default=None,
                    help="Archive filenames to process (default: all .tar in corrected-dir)")
     p.add_argument("--output-dir", default=None,
@@ -559,11 +559,338 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-events", type=int, default=50_000,
                    help="Max total events across all archives (default: 50000)")
     p.add_argument("--max-events-per-member", type=int, default=2000,
-                   help="Max events per tar member; ensures balanced coverage across "
-                        "members instead of exhausting the first one (default: 2000)")
+                   help="Max events per tar member (default: 2000)")
     p.add_argument("--member-name-contains", default=None,
                    help="Filter: only process members whose name contains this string")
+    p.add_argument("--manifest-csv", default=None,
+                   help="Pilot manifest CSV (with --normalized-cache-dir)")
+    p.add_argument("--normalized-cache-dir", default=None,
+                   help="Parquet cache dir from build_normalized_pilot_cache.py")
     return p.parse_args()
+
+
+# ── Cache-mode helpers ────────────────────────────────────────────────────
+
+_DUCK_WINDOW = {
+    "1min": "INTERVAL 1 MINUTE",
+    "5min": "INTERVAL 5 MINUTE",
+    "15min": "INTERVAL 15 MINUTE",
+    "1h": "INTERVAL 1 HOUR",
+    "1d": "INTERVAL 1 DAY",
+}
+
+
+def _load_cache_metadata(cache_dir: pathlib.Path) -> dict:
+    import json
+    meta_path = cache_dir / "cache_metadata.json"
+    if meta_path.exists():
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    return {}
+
+
+def _duck_conn(cache_dir: pathlib.Path):
+    import duckdb
+    con = duckdb.connect()
+    glob = str(pathlib.Path(cache_dir) / "*.parquet")
+    con.execute(f"CREATE VIEW events AS SELECT * FROM read_parquet('{glob}')")
+    return con
+
+
+def compute_t5_from_cache(con) -> list:
+    """Window comparison via DuckDB time buckets — no full event DataFrame."""
+    import numpy as np
+
+    bounds = con.execute(
+        """
+        SELECT MIN(TRY_CAST(timestamp_parsed AS TIMESTAMP)),
+               MAX(TRY_CAST(timestamp_parsed AS TIMESTAMP)),
+               COUNT(*) FILTER (
+                 WHERE timestamp_parsed IS NOT NULL
+                   AND CAST(timestamp_parsed AS VARCHAR) != '')
+        FROM events
+        """
+    ).fetchone()
+    tmin, tmax, n_parseable = bounds
+    if tmin is None or tmax is None or n_parseable == 0:
+        return []
+
+    rows = []
+    for ws, interval in _DUCK_WINDOW.items():
+        counts = con.execute(
+            f"""
+            SELECT time_bucket({interval}, TRY_CAST(timestamp_parsed AS TIMESTAMP)) AS b,
+                   COUNT(*) AS n,
+                   COUNT(DISTINCT NULLIF(host_raw, '')) AS u_hosts,
+                   COUNT(DISTINCT NULLIF(process_raw, '')) AS u_procs,
+                   COUNT(DISTINCT NULLIF(destination_raw, '')) AS u_dests
+            FROM events
+            WHERE timestamp_parsed IS NOT NULL AND CAST(timestamp_parsed AS VARCHAR) != ''
+            GROUP BY 1
+            ORDER BY 1
+            """
+        ).fetchdf()
+
+        if counts.empty:
+            rows.append({
+                "window_size": ws, "number_of_windows": 0,
+                "median_events_per_window": 0, "mean_events_per_window": 0,
+                "empty_window_percent": 100.0,
+                "median_unique_hosts": 0, "median_unique_processes": 0,
+                "median_unique_destinations": 0,
+                "recommendation_primary_backup_no": "pending", "reason": "pending",
+            })
+            continue
+
+        # Expected window count from span
+        delta_s = (tmax - tmin).total_seconds()
+        seconds = {"1min": 60, "5min": 300, "15min": 900, "1h": 3600, "1d": 86400}[ws]
+        expected = max(1, int(delta_s // seconds) + 1)
+        n_nonempty = int(len(counts))
+        n_windows = max(expected, n_nonempty)
+        empty_pct = round(max(0.0, (n_windows - n_nonempty) / n_windows * 100), 1)
+
+        rows.append({
+            "window_size": ws,
+            "number_of_windows": n_windows,
+            "median_events_per_window": round(float(np.median(counts["n"])), 1),
+            "mean_events_per_window": round(float(counts["n"].mean()), 1),
+            "empty_window_percent": empty_pct,
+            "median_unique_hosts": round(float(np.median(counts["u_hosts"])), 1),
+            "median_unique_processes": round(float(np.median(counts["u_procs"])), 1),
+            "median_unique_destinations": round(float(np.median(counts["u_dests"])), 1),
+            "recommendation_primary_backup_no": "pending",
+            "reason": "pending",
+        })
+
+    # Recommendation (same rules as compute_t5)
+    qualify = [
+        r for r in rows
+        if isinstance(r["empty_window_percent"], float)
+        and r["empty_window_percent"] < 50.0
+        and isinstance(r["median_events_per_window"], float)
+        and r["median_events_per_window"] >= 5.0
+    ]
+    if not qualify:
+        for r in rows:
+            r["recommendation_primary_backup_no"] = "no"
+            r["reason"] = (
+                "data too sparse for reliable window selection; "
+                "review timestamp quality before recommending"
+            )
+    else:
+        primary_ws = qualify[0]["window_size"]
+        backup_ws = qualify[1]["window_size"] if len(qualify) > 1 else "1h"
+        for r in rows:
+            ws = r["window_size"]
+            if ws == primary_ws:
+                r["recommendation_primary_backup_no"] = "primary"
+                r["reason"] = (
+                    f"smallest window with <50% empty ({r['empty_window_percent']}%) "
+                    f"and median {r['median_events_per_window']} events/window"
+                )
+            elif ws == backup_ws:
+                r["recommendation_primary_backup_no"] = "backup"
+                r["reason"] = (
+                    f"fallback if primary is too granular; "
+                    f"empty_window_percent={r['empty_window_percent']}%"
+                )
+            else:
+                r["recommendation_primary_backup_no"] = "no"
+                r["reason"] = f"not selected; primary={primary_ws}, backup={backup_ws}"
+    return rows
+
+
+def plot_f3_from_cache(con, out_dir, figures_dir, window_label, pilot_label) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    interval = _DUCK_WINDOW.get(window_label, "INTERVAL 15 MINUTE")
+    series = con.execute(
+        f"""
+        SELECT time_bucket({interval}, TRY_CAST(timestamp_parsed AS TIMESTAMP)) AS t,
+               COUNT(*) AS n
+        FROM events
+        WHERE timestamp_parsed IS NOT NULL AND CAST(timestamp_parsed AS VARCHAR) != ''
+        GROUP BY 1 ORDER BY 1
+        """
+    ).fetchdf().dropna()
+    if series.empty:
+        print("  [F3] No parseable timestamps — skipping.", file=sys.stderr)
+        return
+    fig, ax = plt.subplots(figsize=(13, 4))
+    ax.fill_between(series["t"], series["n"], alpha=0.7, color="#4472C4", step="mid")
+    ax.plot(series["t"], series["n"], color="#2B579A", linewidth=0.8)
+    ax.set_xlabel("Time (UTC)", fontsize=11)
+    ax.set_ylabel(f"Events per {window_label} window", fontsize=11)
+    ax.set_title(
+        f"F3 — Event Volume Over Time  (window: {window_label})  {pilot_label}\n"
+        "[No ground-truth overlay — attack/benign intervals NOT shown]",
+        fontsize=10,
+    )
+    ax.tick_params(axis="x", rotation=30)
+    fig.tight_layout()
+    _save_fig(fig, "F3_event_volume_over_time", out_dir, figures_dir)
+    plt.close(fig)
+
+
+def plot_f4_from_cache(con, out_dir, figures_dir, window_label, pilot_label) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    interval = _DUCK_WINDOW.get(window_label, "INTERVAL 15 MINUTE")
+    colors = {"hosts": "#4472C4", "processes": "#ED7D31",
+              "destinations": "#70AD47", "users": "#A5A5A5"}
+    fig, ax = plt.subplots(figsize=(13, 4))
+    any_plotted = False
+    for label, col, color in [
+        ("hosts", "host_raw", colors["hosts"]),
+        ("processes", "process_raw", colors["processes"]),
+        ("destinations", "destination_raw", colors["destinations"]),
+        ("users", "user_raw", colors["users"]),
+    ]:
+        s = con.execute(
+            f"""
+            SELECT time_bucket({interval}, TRY_CAST(timestamp_parsed AS TIMESTAMP)) AS t,
+                   COUNT(DISTINCT NULLIF({col}, '')) AS n
+            FROM events
+            WHERE timestamp_parsed IS NOT NULL AND CAST(timestamp_parsed AS VARCHAR) != ''
+            GROUP BY 1 ORDER BY 1
+            """
+        ).fetchdf().dropna()
+        if s.empty or s["n"].sum() == 0:
+            continue
+        ax.plot(s["t"], s["n"], label=f"unique {label}", color=color,
+                linewidth=1.4, marker=".", markersize=3)
+        any_plotted = True
+    if not any_plotted:
+        ax.text(0.5, 0.5, "No entity data available",
+                transform=ax.transAxes, ha="center", va="center")
+    ax.set_xlabel("Time (UTC)", fontsize=11)
+    ax.set_ylabel(f"Unique entities per {window_label} window", fontsize=11)
+    ax.set_title(
+        f"F4 — Entity Diversity Over Time  (window: {window_label})  {pilot_label}\n"
+        "[No ground-truth overlay — attack/benign intervals NOT shown]",
+        fontsize=10,
+    )
+    if any_plotted:
+        ax.legend(fontsize=9, loc="upper right")
+    ax.tick_params(axis="x", rotation=30)
+    fig.tight_layout()
+    _save_fig(fig, "F4_entity_diversity_over_time", out_dir, figures_dir)
+    plt.close(fig)
+
+
+def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -> None:
+    import json
+    import pandas as pd
+    from manifest_utils import load_manifest
+
+    cache_dir = pathlib.Path(args.normalized_cache_dir)
+    if not cache_dir.exists() or not list(cache_dir.glob("*.parquet")):
+        print(f"[ERROR] No parquet cache at {cache_dir}", file=sys.stderr)
+        sys.exit(1)
+    if args.archives or args.member_name_contains:
+        print("[ERROR] Cache mode: do not pass --archives or --member-name-contains.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    manifest_meta = {}
+    if args.manifest_csv:
+        mi = load_manifest(pathlib.Path(args.manifest_csv))
+        manifest_meta = {
+            "manifest_version": mi.manifest_version,
+            "manifest_path": str(mi.path),
+            "manifest_member_count": mi.member_count,
+        }
+    cache_meta = _load_cache_metadata(cache_dir)
+    pilot_label = (
+        f"[CACHE MODE: manifest={manifest_meta.get('manifest_version', 'unknown')}; "
+        f"events={cache_meta.get('total_events_written', '?')}]"
+    )
+    ts_rule = cache_meta.get(
+        "timestamp_conversion_rule",
+        "Numeric epoch auto-scale; ISO-8601; naive UTC.",
+    )
+
+    print(f"\n{'='*60}")
+    print(f"EDA 3 — Time Alignment and Window Selection  {pilot_label}")
+    print(f"  cache-dir    : {cache_dir}")
+    print(f"  manifest-csv : {args.manifest_csv}")
+    print(f"  output-dir   : {out_dir}")
+    print(f"{'='*60}\n")
+
+    con = _duck_conn(cache_dir)
+    n_total = con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    n_parseable = con.execute(
+        """
+        SELECT COUNT(*) FROM events
+        WHERE timestamp_parsed IS NOT NULL AND CAST(timestamp_parsed AS VARCHAR) != ''
+        """
+    ).fetchone()[0]
+    print(f"[INFO] Cache events: {n_total:,}; parseable timestamps: {n_parseable:,}")
+
+    print("\nComputing T5 from cache ...")
+    t5_rows = compute_t5_from_cache(con)
+    t5_df = pd.DataFrame(t5_rows) if t5_rows else pd.DataFrame(columns=[
+        "window_size", "number_of_windows", "median_events_per_window",
+        "mean_events_per_window", "empty_window_percent",
+        "median_unique_hosts", "median_unique_processes", "median_unique_destinations",
+        "recommendation_primary_backup_no", "reason",
+    ])
+    _save_csv(t5_df, out_dir / "T5_window_size_comparison.csv",
+              tables_dir / "T5_window_size_comparison.csv")
+
+    primary_row = next(
+        (r for r in t5_rows if r.get("recommendation_primary_backup_no") == "primary"),
+        None,
+    )
+    primary_ws = primary_row["window_size"] if primary_row else "15min"
+
+    print("\nGenerating F3/F4 from cache ...")
+    plot_f3_from_cache(con, out_dir, figures_dir, primary_ws, pilot_label)
+    plot_f4_from_cache(con, out_dir, figures_dir, primary_ws, pilot_label)
+
+    if t5_rows:
+        primary_ws_final, backup_ws_final = write_n1(
+            t5_rows, out_dir, pilot_label, n_total, n_parseable, ts_rule
+        )
+    else:
+        primary_ws_final = backup_ws_final = "review_needed"
+
+    # README with cache/manifest info
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [
+        "EDA 3 — Time Alignment and Window Selection (CACHE MODE)",
+        "=" * 50,
+        f"Generated (UTC): {now}",
+        f"Pilot label    : {pilot_label}",
+        "",
+        "Mode: DuckDB aggregates over normalized Parquet cache.",
+        "No ground-truth overlay. No attack/benign/MITRE labels.",
+        "",
+        f"Manifest version : {manifest_meta.get('manifest_version', 'n/a')}",
+        f"Manifest path    : {manifest_meta.get('manifest_path', args.manifest_csv)}",
+        f"Cache dir        : {cache_dir}",
+        f"Events           : {n_total:,} (parseable ts: {n_parseable:,})",
+        f"max-events cap   : {cache_meta.get('max_events_safety_cap', 'n/a')}",
+        f"Timestamp rule   : {ts_rule}",
+        f"Primary window   : {primary_ws_final}",
+        f"Backup window    : {backup_ws_final}",
+    ]
+    (out_dir / "README_eda03_time_alignment.txt").write_text(
+        "\n".join(lines), encoding="utf-8"
+    )
+    print(f"  [README] {out_dir / 'README_eda03_time_alignment.txt'}")
+    con.close()
+
+    print(f"\n{'='*60}")
+    print(f"EDA 3 COMPLETE  {pilot_label}")
+    print(f"  Events total         : {n_total:,}")
+    print(f"  Events with valid ts : {n_parseable:,}")
+    print(f"  Recommended window   : {primary_ws_final} (backup: {backup_ws_final})")
+    print(f"{'='*60}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
@@ -572,27 +899,36 @@ def main() -> None:
     import pandas as pd
 
     args = parse_args()
-
-    # Resolve paths
-    project_root  = pathlib.Path(args.project_root) if args.project_root else pathlib.Path.cwd()
-    corrected_dir = pathlib.Path(args.corrected_dir)
-    if not corrected_dir.exists():
-        print(f"[ERROR] corrected-dir not found: {corrected_dir}", file=sys.stderr)
-        sys.exit(1)
+    project_root = pathlib.Path(args.project_root) if args.project_root else pathlib.Path.cwd()
 
     if args.output_dir:
         out_dir = pathlib.Path(args.output_dir)
     else:
         out_dir = project_root / "outputs" / "eda_03_time"
-
-    tables_dir  = project_root / "outputs" / "tables"
+    tables_dir = project_root / "outputs" / "tables"
     figures_dir = project_root / "outputs" / "figures"
-
     out_dir.mkdir(parents=True, exist_ok=True)
     tables_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolve archive paths
+    if args.normalized_cache_dir:
+        run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir)
+        return
+
+    if not args.corrected_dir:
+        print("[ERROR] --corrected-dir is required for legacy mode "
+              "(or pass --normalized-cache-dir).", file=sys.stderr)
+        sys.exit(1)
+    if args.manifest_csv and not args.normalized_cache_dir:
+        print("[ERROR] --manifest-csv requires --normalized-cache-dir. "
+              "Build the cache first.", file=sys.stderr)
+        sys.exit(1)
+
+    corrected_dir = pathlib.Path(args.corrected_dir)
+    if not corrected_dir.exists():
+        print(f"[ERROR] corrected-dir not found: {corrected_dir}", file=sys.stderr)
+        sys.exit(1)
+
     if args.archives:
         archive_paths = [corrected_dir / name for name in args.archives]
         missing = [str(p) for p in archive_paths if not p.exists()]
@@ -605,7 +941,6 @@ def main() -> None:
             print(f"[ERROR] No .tar files in {corrected_dir}", file=sys.stderr)
             sys.exit(1)
 
-    # Pilot label
     pilot_label = (
         f"[PILOT SAMPLE: max_members={args.max_members}, "
         f"max_events={args.max_events}, "
@@ -620,7 +955,6 @@ def main() -> None:
     print(f"  output-dir    : {out_dir}")
     print(f"{'='*60}\n")
 
-    # ── Collect events ────────────────────────────────────────────────
     print("Streaming events ...")
     df, n_total, n_parseable, raw_events = collect_events_df(
         archive_paths,
@@ -635,17 +969,13 @@ def main() -> None:
         "Strings: tried numeric first, then ISO-8601 (Z replaced with +00:00). "
         "All datetimes normalized to naive UTC."
     )
-
-    # ── Collection summary ────────────────────────────────────────────
     _stats, _summary_text = _collection_summary(raw_events, args.max_members)
 
     if df.empty:
         print("[WARN] No events — T5/F3/F4 will be empty.", file=sys.stderr)
 
-    # ── T5: Window Size Comparison ────────────────────────────────────
     print("\nComputing T5 window size comparison ...")
     t5_rows = compute_t5(df, pilot_label) if not df.empty else []
-
     t5_df = pd.DataFrame(t5_rows) if t5_rows else pd.DataFrame(columns=[
         "window_size", "number_of_windows", "median_events_per_window",
         "mean_events_per_window", "empty_window_percent",
@@ -653,27 +983,22 @@ def main() -> None:
         "recommendation_primary_backup_no", "reason",
     ])
     _save_csv(t5_df,
-              out_dir    / "T5_window_size_comparison.csv",
+              out_dir / "T5_window_size_comparison.csv",
               tables_dir / "T5_window_size_comparison.csv")
 
-    # Determine primary/backup window for figure titles
-    primary_row = next((r for r in t5_rows if r.get("recommendation_primary_backup_no") == "primary"), None)
-    primary_ws  = primary_row["window_size"] if primary_row else "15min"
+    primary_row = next(
+        (r for r in t5_rows if r.get("recommendation_primary_backup_no") == "primary"),
+        None,
+    )
+    primary_ws = primary_row["window_size"] if primary_row else "15min"
 
-    # ── F3 / F4: Time-series figures ──────────────────────────────────
     print("\nGenerating F3 event volume plot ...")
     if not df.empty:
         plot_f3(df, out_dir, figures_dir, primary_ws, pilot_label)
-    else:
-        print("  [F3] skipped — no data.", file=sys.stderr)
-
     print("\nGenerating F4 entity diversity plot ...")
     if not df.empty:
         plot_f4(df, out_dir, figures_dir, primary_ws, pilot_label)
-    else:
-        print("  [F4] skipped — no data.", file=sys.stderr)
 
-    # ── N1: Recommendation note ───────────────────────────────────────
     print("\nWriting N1 window recommendation ...")
     if t5_rows:
         primary_ws_final, backup_ws_final = write_n1(
@@ -683,28 +1008,21 @@ def main() -> None:
         primary_ws_final = backup_ws_final = "review_needed"
         (out_dir / "N1_window_recommendation_note.txt").write_text(
             "N1 — Window Size Recommendation\n" + "=" * 40 + "\n"
-            "No events parsed; cannot make a recommendation.\n"
-            "Check --corrected-dir and --archives arguments.\n",
+            "No events parsed; cannot make a recommendation.\n",
             encoding="utf-8",
         )
 
-    # ── README ────────────────────────────────────────────────────────
     write_readme(
         out_dir, args, n_total, n_parseable,
         pilot_label, primary_ws_final, backup_ws_final, ts_rule,
         member_summary=_summary_text,
     )
 
-    # ── Summary ───────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"EDA 3 COMPLETE  {pilot_label}")
     print(f"  Events total            : {n_total:,}")
     print(f"  Events with valid ts    : {n_parseable:,}")
     print(f"  Recommended window      : {primary_ws_final}  (backup: {backup_ws_final})")
-    print(f"\n  Outputs:")
-    for f in sorted(out_dir.iterdir()):
-        if f.is_file():
-            print(f"    {f}")
     print(f"{'='*60}")
 
 

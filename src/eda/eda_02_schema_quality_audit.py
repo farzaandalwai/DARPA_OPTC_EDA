@@ -521,8 +521,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--project-root", default=None,
                    help="Project root directory (default: cwd)")
-    p.add_argument("--corrected-dir", required=True,
-                   help="Directory containing corrected .tar archives")
+    p.add_argument("--corrected-dir", default=None,
+                   help="Directory containing corrected .tar archives (required for legacy mode)")
     p.add_argument("--archives", nargs="+", default=None,
                    help="Archive filenames to process (default: all .tar in corrected-dir)")
     p.add_argument("--output-dir", default=None,
@@ -532,11 +532,338 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-events", type=int, default=50_000,
                    help="Max total events across all archives (default: 50000)")
     p.add_argument("--max-events-per-member", type=int, default=2000,
-                   help="Max events per tar member; ensures balanced coverage across "
-                        "members instead of exhausting the first one (default: 2000)")
+                   help="Max events per tar member (default: 2000)")
     p.add_argument("--member-name-contains", default=None,
                    help="Filter: only process members whose name contains this string")
+    p.add_argument("--manifest-csv", default=None,
+                   help="Pilot manifest CSV (required with --normalized-cache-dir)")
+    p.add_argument("--normalized-cache-dir", default=None,
+                   help="Parquet cache dir from build_normalized_pilot_cache.py")
     return p.parse_args()
+
+
+# ── Cache-mode helpers (DuckDB; never load full cache into RAM) ────────────
+
+def _load_cache_metadata(cache_dir: pathlib.Path) -> dict:
+    meta_path = cache_dir / "cache_metadata.json"
+    if meta_path.exists():
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    return {}
+
+
+def _duck_conn(cache_dir: pathlib.Path):
+    import duckdb
+    con = duckdb.connect()
+    glob = str(cache_dir / "*.parquet")
+    con.execute(f"CREATE VIEW events AS SELECT * FROM read_parquet('{glob}')")
+    return con
+
+
+def compute_t3_from_cache(con) -> list:
+    """T3 via DuckDB aggregates — no full DataFrame materialization."""
+    srcs = [r[0] for r in con.execute(
+        "SELECT DISTINCT source_type FROM events ORDER BY 1"
+    ).fetchall()]
+    rows = []
+    for src in srcs:
+        total = con.execute(
+            "SELECT COUNT(*) FROM events WHERE source_type = ?", [src]
+        ).fetchone()[0]
+        if total == 0:
+            continue
+        for field in _AUDIT_FIELDS:
+            miss = con.execute(
+                f"""
+                SELECT COUNT(*) FROM events
+                WHERE source_type = ?
+                  AND ({field} IS NULL OR CAST({field} AS VARCHAR) = '')
+                """,
+                [src],
+            ).fetchone()[0]
+            missing_pct = round(miss / max(total, 1) * 100, 1)
+            unique_count = con.execute(
+                f"""
+                SELECT COUNT(DISTINCT {field}) FROM events
+                WHERE source_type = ?
+                  AND {field} IS NOT NULL AND CAST({field} AS VARCHAR) != ''
+                """,
+                [src],
+            ).fetchone()[0]
+            top = con.execute(
+                f"""
+                SELECT CAST({field} AS VARCHAR) AS v, COUNT(*) AS c
+                FROM events
+                WHERE source_type = ?
+                  AND {field} IS NOT NULL AND CAST({field} AS VARCHAR) != ''
+                GROUP BY 1 ORDER BY c DESC LIMIT 3
+                """,
+                [src],
+            ).fetchall()
+            top3 = "; ".join(f"{v}({c})" for v, c in top)
+            example = top[0][0] if top else ""
+
+            if field == "timestamp_parsed":
+                parsed_data_type = "datetime_str_iso" if unique_count > 1 else "unparseable"
+                raw_data_type = "str"
+            elif field == "timestamp_raw":
+                parsed_data_type = "numeric_epoch_or_str"
+                raw_data_type = "str"
+            else:
+                parsed_data_type = "str"
+                raw_data_type = "str"
+
+            if field in ("source_type",):
+                decision, reason = "keep", "control/provenance field; always present"
+            elif missing_pct > _REVIEW_THRESH:
+                decision, reason = "drop", f"{missing_pct}% missing; exceeds drop threshold"
+            elif unique_count <= 1 and total > 10:
+                decision, reason = "drop", "constant or near-constant field; no discriminative value"
+            elif field == "timestamp_parsed" and missing_pct > 50.0:
+                decision, reason = "review", f"{missing_pct}% unparseable timestamps"
+            elif missing_pct > _KEEP_THRESH:
+                decision, reason = "review", f"{missing_pct}% missing; verify field mapping"
+            else:
+                decision, reason = "keep", f"{missing_pct}% missing; {unique_count} unique values"
+
+            rows.append({
+                "source_type": src,
+                "field_name": field,
+                "raw_data_type": raw_data_type,
+                "parsed_data_type": parsed_data_type,
+                "total_rows": int(total),
+                "missing_percent": missing_pct,
+                "unique_count": int(unique_count),
+                "top_3_values": top3[:300],
+                "example_value": _safe_str(example, 120),
+                "reliability_decision_keep_review_drop": decision,
+                "reason": reason,
+            })
+    return rows
+
+
+def compute_t4_from_cache(con) -> list:
+    """T4 using aggregated DuckDB counts and bounded example IDs."""
+    issues = []
+    seq = [0]
+
+    def add(issue_type, source, field, count, example_id, severity, decision):
+        if count <= 0:
+            return
+        seq[0] += 1
+        issues.append({
+            "issue_id": f"ISSUE_{seq[0]:03d}",
+            "issue_type": issue_type,
+            "affected_file_or_source": source,
+            "affected_field": field,
+            "number_of_rows_affected": int(count),
+            "example_raw_event_id": example_id or "",
+            "severity_high_medium_low": severity,
+            "handling_decision": decision,
+        })
+
+    n_err, ex_err = con.execute(
+        """
+        SELECT COUNT(*),
+               COALESCE(MAX(CASE WHEN parse_status = 'json_parse_error'
+                                 THEN raw_event_id END), '')
+        FROM events WHERE parse_status = 'json_parse_error'
+        """
+    ).fetchone()
+    add("json_parse_error", "cache", "parse_status", n_err, ex_err, "high",
+        "skip malformed lines; investigate member encoding")
+
+    n_no_ts, ex = con.execute(
+        """
+        SELECT COUNT(*), COALESCE(ANY_VALUE(raw_event_id), '')
+        FROM events
+        WHERE parse_status = 'ok'
+          AND (timestamp_raw IS NULL OR CAST(timestamp_raw AS VARCHAR) = '')
+        """
+    ).fetchone()
+    add("missing_timestamp", "cache", "timestamp_raw", n_no_ts, ex, "high",
+        "review timestamp field mapping")
+
+    n_ts_fail, ex = con.execute(
+        """
+        SELECT COUNT(*), COALESCE(ANY_VALUE(raw_event_id), '')
+        FROM events
+        WHERE parse_status = 'ok'
+          AND timestamp_raw IS NOT NULL AND CAST(timestamp_raw AS VARCHAR) != ''
+          AND (timestamp_parsed IS NULL OR CAST(timestamp_parsed AS VARCHAR) = '')
+        """
+    ).fetchone()
+    add("timestamp_parse_failure", "cache", "timestamp_parsed", n_ts_fail, ex, "high",
+        "attempt additional timestamp format conversions")
+
+    n_no_host, ex = con.execute(
+        """
+        SELECT COUNT(*), COALESCE(ANY_VALUE(raw_event_id), '')
+        FROM events
+        WHERE parse_status = 'ok'
+          AND (host_raw IS NULL OR CAST(host_raw AS VARCHAR) = '')
+        """
+    ).fetchone()
+    add("missing_host", "cache", "host_raw", n_no_host, ex, "medium",
+        "attempt inference from member_name")
+
+    n_no_act, ex = con.execute(
+        """
+        SELECT COUNT(*), COALESCE(ANY_VALUE(raw_event_id), '')
+        FROM events
+        WHERE parse_status = 'ok'
+          AND (action_raw IS NULL OR CAST(action_raw AS VARCHAR) = '')
+        """
+    ).fetchone()
+    add("missing_action", "cache", "action_raw", n_no_act, ex, "low",
+        "review action/eventType key candidates")
+
+    return issues
+
+
+def plot_f2_from_cache(con, out_dir: pathlib.Path, figures_dir: pathlib.Path,
+                       pilot_label: str) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    df = con.execute(
+        """
+        SELECT date_trunc('hour', TRY_CAST(timestamp_parsed AS TIMESTAMP)) AS hour_bin,
+               COUNT(*) AS n
+        FROM events
+        WHERE timestamp_parsed IS NOT NULL AND CAST(timestamp_parsed AS VARCHAR) != ''
+        GROUP BY 1
+        ORDER BY 1
+        """
+    ).fetchdf()
+    df = df.dropna(subset=["hour_bin"])
+    if df.empty:
+        print("  [F2] No parseable timestamps — skipping.", file=sys.stderr)
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.bar(df["hour_bin"], df["n"], width=pd.Timedelta("1h") * 0.9, color="#4472C4")
+    ax.set_xlabel("Time (UTC, binned by 1h)", fontsize=11)
+    ax.set_ylabel("Event count", fontsize=11)
+    total_n = int(df["n"].sum())
+    ax.set_title(
+        f"F2 — Timestamp Coverage {pilot_label}\n"
+        f"(No ground-truth overlay  |  {total_n:,} parseable timestamps)",
+        fontsize=11,
+    )
+    ax.tick_params(axis="x", rotation=30)
+    fig.tight_layout()
+    _save_fig(fig, "F2_timestamp_coverage_plot", out_dir, figures_dir)
+    plt.close(fig)
+
+
+def run_eda02_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -> None:
+    import pandas as pd
+    from manifest_utils import load_manifest
+
+    cache_dir = pathlib.Path(args.normalized_cache_dir)
+    if not cache_dir.exists():
+        print(f"[ERROR] normalized-cache-dir not found: {cache_dir}", file=sys.stderr)
+        sys.exit(1)
+    if not list(cache_dir.glob("*.parquet")):
+        print(f"[ERROR] No parquet files in {cache_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    # Conflict checks
+    if args.archives or args.member_name_contains:
+        print(
+            "[ERROR] Cache mode uses the normalized cache built from the manifest. "
+            "Do not pass --archives or --member-name-contains.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    manifest_meta = {}
+    if args.manifest_csv:
+        mi = load_manifest(pathlib.Path(args.manifest_csv))
+        manifest_meta = {
+            "manifest_version": mi.manifest_version,
+            "manifest_path": str(mi.path),
+            "manifest_member_count": mi.member_count,
+            "manifest_total_gib": mi.total_compressed_gib,
+        }
+
+    cache_meta = _load_cache_metadata(cache_dir)
+    pilot_label = (
+        f"[CACHE MODE: manifest={manifest_meta.get('manifest_version', 'unknown')}; "
+        f"events={cache_meta.get('total_events_written', '?')}]"
+    )
+
+    print(f"\n{'='*60}")
+    print(f"EDA 2 — Schema and Data-Quality Audit  {pilot_label}")
+    print(f"  cache-dir     : {cache_dir}")
+    print(f"  manifest-csv  : {args.manifest_csv}")
+    print(f"  output-dir    : {out_dir}")
+    print(f"{'='*60}\n")
+
+    con = _duck_conn(cache_dir)
+    n_events = con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    print(f"[INFO] Events in cache (DuckDB view): {n_events:,}")
+
+    print("\nComputing T3 from cache ...")
+    t3_rows = compute_t3_from_cache(con)
+    t3_df = pd.DataFrame(t3_rows)
+    _save_csv(t3_df, out_dir / "T3_field_reliability_audit.csv",
+              tables_dir / "T3_field_reliability_audit.csv")
+
+    print("\nComputing T4 from cache ...")
+    t4_rows = compute_t4_from_cache(con)
+    t4_df = pd.DataFrame(t4_rows) if t4_rows else pd.DataFrame(columns=[
+        "issue_id", "issue_type", "affected_file_or_source", "affected_field",
+        "number_of_rows_affected", "example_raw_event_id",
+        "severity_high_medium_low", "handling_decision",
+    ])
+    _save_csv(t4_df, out_dir / "T4_data_quality_issue_log.csv",
+              tables_dir / "T4_data_quality_issue_log.csv")
+
+    print("\nGenerating F2 from cache ...")
+    plot_f2_from_cache(con, out_dir, figures_dir, pilot_label)
+
+    # README with cache/manifest metadata
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [
+        "EDA 2 — Schema and Data-Quality Audit (CACHE MODE)",
+        "=" * 50,
+        f"Generated (UTC): {now}",
+        f"Pilot label    : {pilot_label}",
+        "",
+        "Mode: normalized Parquet cache via DuckDB (not full in-memory event list).",
+        "No attack / benign / MITRE claims. No ground-truth overlays.",
+        "",
+        "Manifest",
+        "--------",
+        f"  path             : {manifest_meta.get('manifest_path', args.manifest_csv)}",
+        f"  version          : {manifest_meta.get('manifest_version', 'n/a')}",
+        f"  member count     : {manifest_meta.get('manifest_member_count', 'n/a')}",
+        f"  compressed GiB   : {manifest_meta.get('manifest_total_gib', 'n/a')}",
+        "",
+        "Cache metadata",
+        "--------------",
+        f"  cache-dir        : {cache_dir}",
+        f"  events written   : {cache_meta.get('total_events_written', n_events)}",
+        f"  chunks           : {cache_meta.get('chunks_written', 'n/a')}",
+        f"  max-events cap   : {cache_meta.get('max_events_safety_cap', 'n/a')}",
+        f"  include_raw_json : {cache_meta.get('include_raw_json', False)}",
+        f"  timestamp rule   : {cache_meta.get('timestamp_conversion_rule', 'n/a')}",
+        "",
+        f"T3 rows: {len(t3_rows)}   T4 issues: {len(t4_rows)}",
+    ]
+    (out_dir / "README_eda02_schema_quality.txt").write_text("\n".join(lines), encoding="utf-8")
+    print(f"  [README] {out_dir / 'README_eda02_schema_quality.txt'}")
+    con.close()
+
+    print(f"\n{'='*60}")
+    print(f"EDA 2 COMPLETE  {pilot_label}")
+    print(f"  Events (cache) : {n_events:,}")
+    print(f"  T3 rows        : {len(t3_rows)}")
+    print(f"  T4 issues      : {len(t4_rows)}")
+    print(f"{'='*60}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
@@ -545,27 +872,39 @@ def main() -> None:
     import pandas as pd
 
     args = parse_args()
-
-    # Resolve paths
     project_root = pathlib.Path(args.project_root) if args.project_root else pathlib.Path.cwd()
-    corrected_dir = pathlib.Path(args.corrected_dir)
-    if not corrected_dir.exists():
-        print(f"[ERROR] corrected-dir not found: {corrected_dir}", file=sys.stderr)
-        sys.exit(1)
 
     if args.output_dir:
         out_dir = pathlib.Path(args.output_dir)
     else:
         out_dir = project_root / "outputs" / "eda_02_schema"
-
-    tables_dir  = project_root / "outputs" / "tables"
+    tables_dir = project_root / "outputs" / "tables"
     figures_dir = project_root / "outputs" / "figures"
-
     out_dir.mkdir(parents=True, exist_ok=True)
     tables_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolve archive paths
+    # ── Cache mode ────────────────────────────────────────────────────
+    if args.normalized_cache_dir:
+        run_eda02_cache_mode(args, project_root, out_dir, tables_dir, figures_dir)
+        return
+
+    # ── Legacy capped archive mode ────────────────────────────────────
+    if not args.corrected_dir:
+        print("[ERROR] --corrected-dir is required for legacy mode "
+              "(or pass --normalized-cache-dir for cache mode).", file=sys.stderr)
+        sys.exit(1)
+    if args.manifest_csv and not args.normalized_cache_dir:
+        print("[ERROR] --manifest-csv without --normalized-cache-dir is not supported.\n"
+              "  Build the cache first with build_normalized_pilot_cache.py, "
+              "then pass --normalized-cache-dir.", file=sys.stderr)
+        sys.exit(1)
+
+    corrected_dir = pathlib.Path(args.corrected_dir)
+    if not corrected_dir.exists():
+        print(f"[ERROR] corrected-dir not found: {corrected_dir}", file=sys.stderr)
+        sys.exit(1)
+
     if args.archives:
         archive_paths = [corrected_dir / name for name in args.archives]
         missing = [p for p in archive_paths if not p.exists()]
@@ -578,7 +917,6 @@ def main() -> None:
             print(f"[ERROR] No .tar files found in {corrected_dir}", file=sys.stderr)
             sys.exit(1)
 
-    # Pilot label
     is_pilot = (args.max_members is not None) or (args.max_events is not None)
     pilot_label = (
         f"[PILOT SAMPLE: max_members={args.max_members}, "
@@ -593,7 +931,6 @@ def main() -> None:
     print(f"  output-dir    : {out_dir}")
     print(f"{'='*60}\n")
 
-    # ── Collect events ────────────────────────────────────────────────
     print("Streaming events ...")
     events = list(stream_from_archives(
         archive_paths,
@@ -605,27 +942,23 @@ def main() -> None:
     ))
 
     print(f"\n[INFO] {len(events):,} events collected.")
-
-    # ── Collection summary ────────────────────────────────────────────
     _stats, _summary_text = _collection_summary(events, args.max_members)
 
     if not events:
         print("[WARN] No events parsed — T3/T4/F2 will be empty.", file=sys.stderr)
 
-    # ── T3: Field Reliability Audit ───────────────────────────────────
     print("\nComputing T3 field reliability audit ...")
     source_types = sorted({e.get("source_type", "unknown") for e in events})
-    t3_rows  = compute_t3(events, source_types)
-    t3_df    = pd.DataFrame(t3_rows) if t3_rows else pd.DataFrame(columns=[
+    t3_rows = compute_t3(events, source_types)
+    t3_df = pd.DataFrame(t3_rows) if t3_rows else pd.DataFrame(columns=[
         "source_type", "field_name", "raw_data_type", "parsed_data_type",
         "total_rows", "missing_percent", "unique_count", "top_3_values",
         "example_value", "reliability_decision_keep_review_drop", "reason",
     ])
     _save_csv(t3_df,
-              out_dir    / "T3_field_reliability_audit.csv",
+              out_dir / "T3_field_reliability_audit.csv",
               tables_dir / "T3_field_reliability_audit.csv")
 
-    # ── T4: Data Quality Issue Log ────────────────────────────────────
     print("\nComputing T4 data quality issues ...")
     t4_rows_data = compute_t4(events)
     t4_df = pd.DataFrame(t4_rows_data) if t4_rows_data else pd.DataFrame(columns=[
@@ -634,14 +967,12 @@ def main() -> None:
         "severity_high_medium_low", "handling_decision",
     ])
     _save_csv(t4_df,
-              out_dir    / "T4_data_quality_issue_log.csv",
+              out_dir / "T4_data_quality_issue_log.csv",
               tables_dir / "T4_data_quality_issue_log.csv")
 
-    # ── F2: Timestamp Coverage Plot ───────────────────────────────────
     print("\nGenerating F2 timestamp coverage plot ...")
     plot_f2(events, out_dir, figures_dir, pilot_label)
 
-    # ── README ────────────────────────────────────────────────────────
     write_readme(
         out_dir, args,
         n_events=len(events),
@@ -652,7 +983,6 @@ def main() -> None:
         member_summary=_summary_text,
     )
 
-    # ── Summary ───────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"EDA 2 COMPLETE  {pilot_label}")
     print(f"  Events parsed          : {len(events):,}")

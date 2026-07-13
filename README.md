@@ -152,7 +152,9 @@ DARPA_OPTC_EDA/
 │       ├── eda_02_schema_quality_audit.py
 │       ├── eda_03_time_window_selection.py
 │       ├── build_pilot_member_inventory.py  ← pilot-subset stage 1
-│       └── select_pilot_manifest.py         ← pilot-subset stage 2 (10 GiB)
+│       ├── select_pilot_manifest.py         ← pilot-subset stage 2 (10 GiB)
+│       ├── build_normalized_pilot_cache.py  ← slim Parquet cache from manifest
+│       └── manifest_utils.py                ← shared manifest loader
 ├── .gitignore
 ├── README.md
 └── requirements.txt
@@ -279,6 +281,48 @@ python3 src/eda/select_pilot_manifest.py \
 Primary output: `configs/pilot_manifest_10gb.csv`, plus date/host summaries,
 validation checks, and `README_pilot_manifest_10gb.txt` under
 `outputs/pilot_selection/`.
+
+---
+
+## Normalized pilot cache (manifest-driven, RAM-safe)
+
+Build a slim chunked Parquet cache from the exact 10 GiB pilot manifest.
+Members are streamed line-by-line (no full-member `read()`); full `raw_json`
+is not stored. Use this before running full-manifest EDA 2/3.
+
+### 100k-event cache smoke test
+
+```bash
+python3 src/eda/build_normalized_pilot_cache.py \
+  --project-root /content/DARPA_OPTC_EDA_REPO \
+  --corrected-dir /content/drive/MyDrive/DARPA_OPTC_EDA/corrected_archives \
+  --manifest-csv /content/drive/MyDrive/DARPA_OPTC_EDA/pilot_manifest_10gb/pilot_manifest_10gb.csv \
+  --cache-dir /content/drive/MyDrive/DARPA_OPTC_EDA/pilot_normalized_cache_smoke \
+  --chunk-size 50000 \
+  --max-events 100000 \
+  --overwrite
+```
+
+### EDA 2 from cache
+
+```bash
+python3 src/eda/eda_02_schema_quality_audit.py \
+  --project-root /content/DARPA_OPTC_EDA_REPO \
+  --manifest-csv /content/drive/MyDrive/DARPA_OPTC_EDA/pilot_manifest_10gb/pilot_manifest_10gb.csv \
+  --normalized-cache-dir /content/drive/MyDrive/DARPA_OPTC_EDA/pilot_normalized_cache_smoke
+```
+
+### EDA 3 from cache
+
+```bash
+python3 src/eda/eda_03_time_window_selection.py \
+  --project-root /content/DARPA_OPTC_EDA_REPO \
+  --manifest-csv /content/drive/MyDrive/DARPA_OPTC_EDA/pilot_manifest_10gb/pilot_manifest_10gb.csv \
+  --normalized-cache-dir /content/drive/MyDrive/DARPA_OPTC_EDA/pilot_normalized_cache_smoke
+```
+
+Legacy capped archive mode (`--archives`, `--max-members`, `--max-events`,
+`--max-events-per-member`) still works without a manifest/cache.
 
 ---
 
