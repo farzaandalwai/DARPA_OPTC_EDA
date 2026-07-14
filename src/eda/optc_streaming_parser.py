@@ -66,14 +66,169 @@ _NET_KW = {"flow", "netflow", "bro", "dns", "http", "conn",
 _EP_KW  = {"ecar", "endpoint", "sysclient", "process", "file_event",
            "registry", "sysmon", "edr", "host", ".ecar"}
 
-# Slim columns written to normalized cache (no full raw_json)
+# Schema version for slim normalized cache
+SCHEMA_VERSION = "optc_normalized_v2"
+
+# Exact nested properties.* keys → cache column names (OpTC ECAR)
+_PROPERTY_COLUMN_MAP = {
+    "image_path": "image_path_raw",
+    "parent_image_path": "parent_image_path_raw",
+    "command_line": "command_line_raw",
+    "file_path": "file_path_raw",
+    "module_path": "module_path_raw",
+    "key": "registry_key_raw",
+    "value": "registry_value_raw",
+    "data": "registry_data_raw",
+    "type": "registry_type_raw",
+    "path": "generic_path_raw",
+    "info_class": "info_class_raw",
+    "task_name": "task_name_raw",
+    "task_pid": "task_pid_raw",
+    "task_process_uuid": "task_process_uuid_raw",
+    "name": "property_name_raw",
+    "service_type": "service_type_raw",
+    "start_type": "service_start_type_raw",
+    "src_ip": "src_ip_raw",
+    "src_port": "src_port_raw",
+    "dest_ip": "dest_ip_raw",
+    "dest_port": "dest_port_raw",
+    "direction": "direction_raw",
+    "l4protocol": "protocol_raw",
+    "payload": "shell_payload_raw",
+    "context_info": "shell_context_raw",
+    "logon_id": "logon_id_raw",
+    "user": "property_user_raw",
+    "privileges": "privileges_raw",
+    "acuity_level": "acuity_level_raw",
+    "src_pid": "thread_src_pid_raw",
+    "src_tid": "thread_src_tid_raw",
+    "tgt_pid": "thread_tgt_pid_raw",
+    "tgt_tid": "thread_tgt_tid_raw",
+}
+
+# Slim columns written to normalized cache (no full raw_json).
+# Order is stable and documented as schema optc_normalized_v2.
 SLIM_EVENT_COLUMNS = [
-    "file_id", "archive_name", "member_name", "line_number", "raw_event_id",
-    "parse_status", "parse_error",
-    "timestamp_raw", "timestamp_parsed",
-    "host_raw", "user_raw", "process_raw", "parent_process_raw",
-    "action_raw", "object_raw", "destination_raw", "source_type",
+    # Evidence / provenance
+    "file_id",
+    "archive_name",
+    "member_name",
+    "line_number",
+    "raw_event_id",
+    "parse_status",
+    "parse_error",
+    # Time / host / action / object (existing)
+    "timestamp_raw",
+    "timestamp_parsed",
+    "host_raw",
+    "action_raw",
+    "object_raw",
+    "source_type",
+    # Backward-compatible derived fields (corrected mappings)
+    "user_raw",
+    "process_raw",
+    "parent_process_raw",
+    "destination_raw",
+    "object_value_raw",
+    # Exact top-level OpTC identifiers (strings)
+    "actor_id_raw",
+    "object_id_raw",
+    "pid_raw",
+    "ppid_raw",
+    "tid_raw",
+    "principal_raw",
+    # Nested properties.* (selective)
+    "image_path_raw",
+    "parent_image_path_raw",
+    "command_line_raw",
+    "file_path_raw",
+    "module_path_raw",
+    "registry_key_raw",
+    "registry_value_raw",
+    "registry_data_raw",
+    "registry_type_raw",
+    "generic_path_raw",
+    "info_class_raw",
+    "task_name_raw",
+    "task_pid_raw",
+    "task_process_uuid_raw",
+    "property_name_raw",
+    "service_name_raw",
+    "service_type_raw",
+    "service_start_type_raw",
+    "src_ip_raw",
+    "src_port_raw",
+    "dest_ip_raw",
+    "dest_port_raw",
+    "direction_raw",
+    "protocol_raw",
+    "shell_payload_raw",
+    "shell_context_raw",
+    "logon_id_raw",
+    "property_user_raw",
+    "privileges_raw",
+    "acuity_level_raw",
+    "thread_src_pid_raw",
+    "thread_src_tid_raw",
+    "thread_tgt_pid_raw",
+    "thread_tgt_tid_raw",
+    # Schema discovery
+    "properties_keys_raw",
+    "unmapped_property_keys_raw",
 ]
+
+
+def _as_str(val) -> str:
+    """Stringify a field as text; None/empty → ''."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    return s
+
+
+def _prop_get(props: dict, key: str) -> str:
+    if not props or key not in props:
+        return ""
+    return _as_str(props.get(key))
+
+
+def _derive_object_value(object_type: str, props: dict, object_id: str) -> str:
+    """
+    Deterministic object_value_raw from object type + properties.
+    Each typed preference falls back to object_id when empty.
+    """
+    ot = (object_type or "").strip().upper()
+    preferred = ""
+    if ot == "FLOW":
+        dip = _prop_get(props, "dest_ip")
+        dport = _prop_get(props, "dest_port")
+        if dip and dport:
+            preferred = f"{dip}:{dport}"
+        else:
+            preferred = dip or dport
+    elif ot == "FILE":
+        preferred = _prop_get(props, "file_path")
+    elif ot == "MODULE":
+        preferred = _prop_get(props, "module_path")
+    elif ot == "REGISTRY":
+        preferred = _prop_get(props, "key")
+    elif ot == "PROCESS":
+        preferred = _prop_get(props, "command_line") or _prop_get(props, "image_path")
+    elif ot == "TASK":
+        preferred = _prop_get(props, "task_name") or _prop_get(props, "path")
+    elif ot == "SERVICE":
+        preferred = _prop_get(props, "name")
+    elif ot == "USER_SESSION":
+        preferred = _prop_get(props, "user") or _prop_get(props, "logon_id")
+    elif ot == "SHELL":
+        preferred = _prop_get(props, "payload")
+    # else: unlisted types — preferred stays empty → objectID
+    return preferred or object_id or ""
+
+
+def blank_slim_event() -> dict:
+    """Return a dict with every SLIM_EVENT_COLUMNS key set to ''."""
+    return {c: "" for c in SLIM_EVENT_COLUMNS}
 
 
 def infer_source_type_from_member(member_name: str) -> str:
@@ -157,45 +312,111 @@ def normalize_event(
     include_raw_json: bool = True,
 ) -> dict:
     """
-    Build a flat normalized event dict from a raw JSON object.
-    Provenance and normalized fields are always set.
-    Full raw_json is optional (disable for slim Parquet cache).
+    Build a flat normalized event dict (schema optc_normalized_v2).
+
+    Top-level OpTC identifiers are captured exactly. Nested ``properties``
+    keys are selectively mapped; unmapped keys are recorded in
+    ``unmapped_property_keys_raw``. Full raw_json is optional (disable for
+    slim Parquet cache).
+
+    Derived compatibility fields:
+      process_raw         = properties.image_path
+                            (event-associated image path; not always a
+                             definitive "target process" for every object type)
+      parent_process_raw  = properties.parent_image_path
+      destination_raw     = properties.dest_ip
+      user_raw            = principal if non-empty else properties.user
+                            (never actorID)
     """
     _, raw_id = _extract_first(raw, _EVENT_ID_KEYS)
     evidence_id = str(raw_id) if raw_id is not None else _stable_id(
         archive_name, member_name, line_num
     )
 
-    _, ts_raw    = _extract_first(raw, _TIMESTAMP_KEYS)
-    _, host_raw  = _extract_first(raw, _HOST_KEYS)
-    _, user_raw  = _extract_first(raw, _USER_KEYS)
-    _, proc_raw  = _extract_first(raw, _PROCESS_KEYS)
-    _, pproc_raw = _extract_first(raw, _PARENT_PROC_KEYS)
-    _, act_raw   = _extract_first(raw, _ACTION_KEYS)
-    _, obj_raw   = _extract_first(raw, _OBJECT_KEYS)
-    _, dest_raw  = _extract_first(raw, _DEST_KEYS)
-
+    _, ts_raw = _extract_first(raw, _TIMESTAMP_KEYS)
     ts_parsed = _parse_timestamp(ts_raw)
 
-    out = {
-        "file_id"            : event_counter,
-        "archive_name"       : archive_name,
-        "member_name"        : member_name,
-        "line_number"        : line_num,
-        "raw_event_id"       : evidence_id,
-        "parse_status"       : "ok",
-        "parse_error"        : "",
-        "timestamp_raw"      : "" if ts_raw is None else str(ts_raw),
-        "timestamp_parsed"   : ts_parsed.isoformat() if ts_parsed else "",
-        "host_raw"           : "" if host_raw is None else str(host_raw),
-        "user_raw"           : "" if user_raw is None else str(user_raw),
-        "process_raw"        : "" if proc_raw is None else str(proc_raw),
-        "parent_process_raw" : "" if pproc_raw is None else str(pproc_raw),
-        "action_raw"         : "" if act_raw is None else str(act_raw),
-        "object_raw"         : "" if obj_raw is None else str(obj_raw),
-        "destination_raw"    : "" if dest_raw is None else str(dest_raw),
-        "source_type"        : source_type,
-    }
+    # Top-level ECAR fields (exact when present)
+    host_raw = _as_str(raw.get("hostname"))
+    if not host_raw:
+        _, host_fallback = _extract_first(raw, _HOST_KEYS)
+        host_raw = _as_str(host_fallback)
+
+    action_raw = _as_str(raw.get("action"))
+    if not action_raw:
+        _, act_fallback = _extract_first(raw, _ACTION_KEYS)
+        action_raw = _as_str(act_fallback)
+
+    object_raw = _as_str(raw.get("object"))
+    if not object_raw:
+        _, obj_fallback = _extract_first(raw, _OBJECT_KEYS)
+        object_raw = _as_str(obj_fallback)
+
+    actor_id_raw = _as_str(raw.get("actorID"))
+    object_id_raw = _as_str(raw.get("objectID"))
+    pid_raw = _as_str(raw.get("pid"))
+    ppid_raw = _as_str(raw.get("ppid"))
+    tid_raw = _as_str(raw.get("tid"))
+    principal_raw = _as_str(raw.get("principal"))
+
+    # Nested properties (may be missing or non-dict)
+    props = raw.get("properties")
+    if not isinstance(props, dict):
+        props = {}
+
+    prop_cols = {col: "" for col in _PROPERTY_COLUMN_MAP.values()}
+    for key, col in _PROPERTY_COLUMN_MAP.items():
+        if key in props:
+            prop_cols[col] = _as_str(props.get(key))
+
+    # service_name_raw is SERVICE-specific derivation from properties.name
+    if object_raw.strip().upper() == "SERVICE":
+        prop_cols["service_name_raw"] = prop_cols.get("property_name_raw", "")
+    else:
+        prop_cols["service_name_raw"] = ""
+
+    properties_keys = sorted(str(k) for k in props.keys())
+    mapped_keys = set(_PROPERTY_COLUMN_MAP.keys())
+    unmapped = sorted(k for k in properties_keys if k not in mapped_keys)
+
+    # Derived compatibility fields (corrected mappings)
+    user_raw = principal_raw if principal_raw else prop_cols["property_user_raw"]
+    process_raw = prop_cols["image_path_raw"]
+    parent_process_raw = prop_cols["parent_image_path_raw"]
+    destination_raw = prop_cols["dest_ip_raw"]
+    object_value_raw = _derive_object_value(object_raw, props, object_id_raw)
+
+    out = blank_slim_event()
+    out.update({
+        "file_id": event_counter,
+        "archive_name": archive_name,
+        "member_name": member_name,
+        "line_number": line_num,
+        "raw_event_id": evidence_id,
+        "parse_status": "ok",
+        "parse_error": "",
+        "timestamp_raw": "" if ts_raw is None else str(ts_raw),
+        "timestamp_parsed": ts_parsed.isoformat() if ts_parsed else "",
+        "host_raw": host_raw,
+        "action_raw": action_raw,
+        "object_raw": object_raw,
+        "source_type": source_type,
+        "user_raw": user_raw,
+        "process_raw": process_raw,
+        "parent_process_raw": parent_process_raw,
+        "destination_raw": destination_raw,
+        "object_value_raw": object_value_raw,
+        "actor_id_raw": actor_id_raw,
+        "object_id_raw": object_id_raw,
+        "pid_raw": pid_raw,
+        "ppid_raw": ppid_raw,
+        "tid_raw": tid_raw,
+        "principal_raw": principal_raw,
+        "properties_keys_raw": ",".join(properties_keys),
+        "unmapped_property_keys_raw": ",".join(unmapped),
+    })
+    out.update(prop_cols)
+
     if include_raw_json:
         out["raw_json"] = json.dumps(raw, separators=(",", ":"))
     else:
@@ -209,27 +430,22 @@ def _error_record(
     source_type: str,
     include_raw_json: bool = True,
 ) -> dict:
-    """Return a record representing a JSON parse failure."""
-    blank = ""
-    # Bounded snippet for evidence only (never full member)
+    """Return a record representing a JSON parse failure (schema-v2 blanks)."""
     snippet = raw_snippet[:300]
-    return {
-        "file_id"            : event_counter,
-        "archive_name"       : archive_name,
-        "member_name"        : member_name,
-        "line_number"        : line_num,
-        "raw_event_id"       : _stable_id(archive_name, member_name, line_num),
-        "raw_json"           : snippet if include_raw_json else "",
-        "parse_status"       : "json_parse_error",
-        "parse_error"        : error_msg[:200],
-        "timestamp_raw"      : blank, "timestamp_parsed"   : blank,
-        "host_raw"           : blank, "user_raw"           : blank,
-        "process_raw"        : blank, "parent_process_raw" : blank,
-        "action_raw"         : blank, "object_raw"         : blank,
-        "destination_raw"    : blank, "source_type"        : source_type,
-        # Always keep a tiny evidence snippet separate from full raw_json
-        "error_snippet"      : snippet,
-    }
+    out = blank_slim_event()
+    out.update({
+        "file_id": event_counter,
+        "archive_name": archive_name,
+        "member_name": member_name,
+        "line_number": line_num,
+        "raw_event_id": _stable_id(archive_name, member_name, line_num),
+        "parse_status": "json_parse_error",
+        "parse_error": error_msg[:200],
+        "source_type": source_type,
+        "error_snippet": snippet,
+        "raw_json": snippet if include_raw_json else "",
+    })
+    return out
 
 
 def stream_events(

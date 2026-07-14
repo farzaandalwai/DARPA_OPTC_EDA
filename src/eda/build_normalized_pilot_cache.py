@@ -34,6 +34,7 @@ from manifest_utils import (  # type: ignore
     verify_manifest_members_in_archives,
 )
 from optc_streaming_parser import (  # type: ignore
+    SCHEMA_VERSION,
     SLIM_EVENT_COLUMNS,
     stream_from_archives,
 )
@@ -43,6 +44,19 @@ TIMESTAMP_RULE = (
     "ISO-8601: timezone-aware values are converted to UTC via astimezone(); "
     "timezone-naive ISO values are assumed to already be UTC. "
     "Stored timestamp_parsed is naive UTC."
+)
+
+SCHEMA_NOTES = (
+    "Schema optc_normalized_v2 selectively normalizes nested OpTC "
+    "properties.* keys into dedicated columns. Unmapped property keys are "
+    "recorded in unmapped_property_keys_raw. Derived compatibility fields: "
+    "process_raw=properties.image_path (event-associated image path; not "
+    "definitive target process for every object type); "
+    "parent_process_raw=properties.parent_image_path; "
+    "destination_raw=properties.dest_ip; "
+    "user_raw=principal or else properties.user (never actorID). "
+    "Full raw_json is excluded; raw events remain recoverable via "
+    "archive_name / member_name / line_number / raw_event_id."
 )
 
 # Max parse-error evidence rows kept in a side CSV
@@ -286,6 +300,7 @@ def main() -> None:
     metadata = {
         "manifest_path": str(manifest.path),
         "manifest_version": manifest.manifest_version,
+        "schema_version": SCHEMA_VERSION,
         "manifest_member_count": manifest.member_count,
         "matched_member_count": verify["matched_member_count"],
         "missing_member_count": verify["missing_member_count"],
@@ -309,6 +324,7 @@ def main() -> None:
         "compression": args.compression,
         "include_raw_json": False,
         "schema_columns": SLIM_EVENT_COLUMNS,
+        "schema_notes": SCHEMA_NOTES,
         "timestamp_conversion_rule": TIMESTAMP_RULE,
         "smoke_test_projection": projection,
     }
@@ -328,12 +344,17 @@ def main() -> None:
         "Normalized Pilot Event Cache",
         "=" * 50,
         f"Generated (UTC): {metadata['end_time_utc']}",
+        f"Schema version: {SCHEMA_VERSION}",
         "",
         "This cache stores SLIM normalized events only (no full raw_json).",
         "Evidence locators (archive_name, member_name, line_number, raw_event_id)",
         "allow reopening the original tar member line if needed.",
         "Archives were not extracted to disk; members were streamed.",
         "No attack / benign / MITRE / ground-truth labels were assigned.",
+        "",
+        "Schema notes",
+        "------------",
+        f"  {SCHEMA_NOTES}",
         "",
         f"Manifest: {manifest.path}",
         f"Manifest version: {manifest.manifest_version}",
