@@ -40,7 +40,9 @@ from optc_streaming_parser import (  # type: ignore
 
 TIMESTAMP_RULE = (
     "Numeric: epoch_ns→/1e9, epoch_ms→/1e3, epoch_s as-is. "
-    "Strings: numeric first, then ISO-8601 (Z→+00:00). Naive UTC."
+    "ISO-8601: timezone-aware values are converted to UTC via astimezone(); "
+    "timezone-naive ISO values are assumed to already be UTC. "
+    "Stored timestamp_parsed is naive UTC."
 )
 
 # Max parse-error evidence rows kept in a side CSV

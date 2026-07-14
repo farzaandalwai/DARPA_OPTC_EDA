@@ -96,6 +96,13 @@ def _parse_timestamp(raw_val) -> Optional[datetime.datetime]:
     """
     Convert raw timestamp to a naive UTC datetime.
     Handles: epoch int/float (seconds, milliseconds, nanoseconds), ISO strings.
+
+    ISO timezone rules:
+      - Offset-aware values are converted to UTC via astimezone(), then
+        stored as naive UTC (tzinfo removed after conversion).
+      - Timezone-naive ISO strings are assumed to already represent UTC;
+        the clock time is left unchanged.
+
     Returns None on failure.
     """
     if raw_val is None:
@@ -116,7 +123,11 @@ def _parse_timestamp(raw_val) -> Optional[datetime.datetime]:
                 pass
             s = s.replace("Z", "+00:00")
             dt = datetime.datetime.fromisoformat(s)
-            return dt.replace(tzinfo=None)   # normalize to naive UTC
+            if dt.tzinfo is not None:
+                # Convert offset-aware time to UTC, then store as naive UTC
+                dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            # else: naive ISO — assume already UTC; leave clock time unchanged
+            return dt
     except (ValueError, OSError, OverflowError, TypeError):
         pass
     return None
