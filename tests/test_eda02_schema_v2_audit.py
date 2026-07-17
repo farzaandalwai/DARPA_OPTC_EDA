@@ -111,3 +111,123 @@ def test_empty_diagnostic_fields_retained():
     assert pe["reliability_decision_keep_review_drop"] == "keep"
     assert field_role("parse_status") == "provenance"
     assert field_role("source_type") == "control"
+
+
+def test_derived_parent_process_not_dropped_on_non_process_absence():
+    """
+    Mirror real-cache pattern: parent_process_raw high overall missingness
+    because most events are non-PROCESS, but low conditional missing on PROCESS.
+    """
+    events = []
+    # ~90% non-PROCESS (empty parent_process_raw by design)
+    for i in range(18):
+        events.append(
+            _base_event(
+                raw_event_id=f"f{i}",
+                object_raw="FILE",
+                process_raw="",
+                parent_process_raw="",
+                parent_image_path_raw="",
+            )
+        )
+    # PROCESS rows with parent present (~12.6%-like low applicable missing)
+    for i in range(2):
+        events.append(
+            _base_event(
+                raw_event_id=f"p{i}",
+                object_raw="PROCESS",
+                process_raw=f"C:\\a{i}.exe",
+                image_path_raw=f"C:\\a{i}.exe",
+                parent_process_raw=f"C:\\parent{i}.exe",
+                parent_image_path_raw=f"C:\\parent{i}.exe",
+            )
+        )
+    rows = compute_t3(events, ["endpoint"])
+    pp = next(r for r in rows if r["field_name"] == "parent_process_raw")
+    assert pp["field_role"] == "object_specific"
+    assert pp["applicable_object_types"] == "PROCESS"
+    assert pp["applicable_rows"] == 2
+    assert pp["missing_percent_overall"] >= 80.0
+    assert pp["missing_percent_applicable"] == 0.0
+    assert pp["reliability_decision_keep_review_drop"] != "drop"
+    assert pp["reliability_decision_keep_review_drop"] == "keep"
+
+
+def test_derived_destination_not_penalized_on_non_flow_absence():
+    """
+    destination_raw overall missingness looks reviewable, but FLOW-conditional
+    missingness is near-zero — decision must use applicable rows.
+    """
+    events = []
+    for i in range(13):
+        events.append(
+            _base_event(
+                raw_event_id=f"p{i}",
+                object_raw="PROCESS",
+                destination_raw="",
+                dest_ip_raw="",
+                process_raw=f"C:\\p{i}.exe",
+                image_path_raw=f"C:\\p{i}.exe",
+            )
+        )
+    for i in range(7):
+        events.append(
+            _base_event(
+                raw_event_id=f"fl{i}",
+                object_raw="FLOW",
+                destination_raw=f"8.8.8.{i}",
+                dest_ip_raw=f"8.8.8.{i}",
+                process_raw="C:\\svchost.exe",
+                image_path_raw="C:\\svchost.exe",
+            )
+        )
+    rows = compute_t3(events, ["endpoint"])
+    dest = next(r for r in rows if r["field_name"] == "destination_raw")
+    assert dest["field_role"] == "object_specific"
+    assert dest["applicable_object_types"] == "FLOW"
+    assert dest["applicable_rows"] == 7
+    assert dest["missing_percent_overall"] > 60.0
+    assert dest["missing_percent_applicable"] == 0.0
+    assert dest["reliability_decision_keep_review_drop"] == "keep"
+    assert dest["reliability_decision_keep_review_drop"] not in ("review", "drop")
+
+
+def test_process_raw_shares_image_path_applicability():
+    from eda_02_schema_quality_audit import applicable_object_types_for  # type: ignore
+
+    assert field_role("process_raw") == "object_specific"
+    assert applicable_object_types_for("process_raw") == [
+        "PROCESS", "FLOW", "FILE", "MODULE", "THREAD", "SHELL",
+    ]
+    assert applicable_object_types_for("process_raw") == applicable_object_types_for(
+        "image_path_raw"
+    )
+
+    # Mix: PROCESS with process_raw present; REGISTRY (non-applicable) empty.
+    events = [
+        _base_event(
+            raw_event_id=f"p{i}",
+            object_raw="PROCESS",
+            process_raw=f"C:\\p{i}.exe",
+            image_path_raw=f"C:\\p{i}.exe",
+        )
+        for i in range(10)
+    ] + [
+        _base_event(
+            raw_event_id=f"r{i}",
+            object_raw="REGISTRY",
+            process_raw="",
+            image_path_raw="",
+        )
+        for i in range(10)
+    ]
+    rows = compute_t3(events, ["endpoint"])
+    pr = next(r for r in rows if r["field_name"] == "process_raw")
+    assert pr["field_role"] == "object_specific"
+    assert pr["applicable_object_types"] == (
+        "PROCESS,FLOW,FILE,MODULE,THREAD,SHELL"
+    )
+    assert pr["applicable_rows"] == 10
+    assert pr["missing_percent_overall"] == 50.0
+    assert pr["missing_percent_applicable"] == 0.0
+    assert pr["reliability_decision_keep_review_drop"] == "keep"

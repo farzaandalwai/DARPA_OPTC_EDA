@@ -57,7 +57,7 @@ _CORE_FIELDS = {
     "timestamp_raw", "timestamp_parsed", "host_raw", "action_raw", "object_raw",
 }
 _ENTITY_FIELDS = {
-    "user_raw", "process_raw", "parent_process_raw", "destination_raw",
+    "user_raw",
     "object_value_raw", "actor_id_raw", "object_id_raw", "pid_raw", "ppid_raw",
     "tid_raw", "principal_raw",
 }
@@ -65,9 +65,15 @@ _DISCOVERY_FIELDS = {"properties_keys_raw", "unmapped_property_keys_raw"}
 
 # Object-specific fields → object types where the field is expected to apply.
 # Decisions use missingness among applicable rows, not the full sample.
+# Derived compatibility fields inherit applicability from their source columns:
+#   process_raw ← image_path_raw
+#   parent_process_raw ← parent_image_path_raw
+#   destination_raw ← dest_ip_raw
 _OBJECT_SPECIFIC_APPLICABLE: dict[str, list[str]] = {
     "image_path_raw": ["PROCESS", "FLOW", "FILE", "MODULE", "THREAD", "SHELL"],
+    "process_raw": ["PROCESS", "FLOW", "FILE", "MODULE", "THREAD", "SHELL"],
     "parent_image_path_raw": ["PROCESS"],
+    "parent_process_raw": ["PROCESS"],
     "command_line_raw": ["PROCESS"],
     "file_path_raw": ["FILE"],
     "module_path_raw": ["MODULE"],
@@ -88,6 +94,7 @@ _OBJECT_SPECIFIC_APPLICABLE: dict[str, list[str]] = {
     "src_port_raw": ["FLOW"],
     "dest_ip_raw": ["FLOW"],
     "dest_port_raw": ["FLOW"],
+    "destination_raw": ["FLOW"],
     "direction_raw": ["FLOW"],
     "protocol_raw": ["FLOW"],
     "shell_payload_raw": ["SHELL"],
@@ -139,12 +146,12 @@ def field_role(field: str) -> str:
         return "control"
     if field in _CORE_FIELDS:
         return "core"
+    if field in _OBJECT_SPECIFIC_APPLICABLE:
+        return "object_specific"
     if field in _ENTITY_FIELDS:
         return "entity"
     if field in _DISCOVERY_FIELDS:
         return "discovery"
-    if field in _OBJECT_SPECIFIC_APPLICABLE:
-        return "object_specific"
     return "entity"
 
 
