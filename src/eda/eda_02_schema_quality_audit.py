@@ -38,22 +38,207 @@ from typing import Optional
 
 # ── Local import ──────────────────────────────────────────────────────────
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from optc_streaming_parser import stream_from_archives   # type: ignore
+from optc_streaming_parser import (  # type: ignore
+    SLIM_EVENT_COLUMNS,
+    stream_from_archives,
+)
 
 # ── Constants ─────────────────────────────────────────────────────────────
-# Normalized fields yielded by the streaming parser (excluding provenance)
-_AUDIT_FIELDS = [
-    "timestamp_raw", "timestamp_parsed",
-    "host_raw", "user_raw", "process_raw", "parent_process_raw",
-    "action_raw", "object_raw", "destination_raw",
-    "source_type",
-]
-# Provenance / control fields — included in completeness check but kept separate
-_PROV_FIELDS = ["archive_name", "member_name", "parse_status", "raw_event_id"]
+# Full schema-v2 audit surface (stays synchronized with the parser).
+_AUDIT_FIELDS = list(SLIM_EVENT_COLUMNS)
+
+# Field-role taxonomy for T3.
+_PROVENANCE_FIELDS = {
+    "file_id", "archive_name", "member_name", "line_number",
+    "raw_event_id", "parse_status", "parse_error",
+}
+_CONTROL_FIELDS = {"source_type"}
+_CORE_FIELDS = {
+    "timestamp_raw", "timestamp_parsed", "host_raw", "action_raw", "object_raw",
+}
+_ENTITY_FIELDS = {
+    "user_raw", "process_raw", "parent_process_raw", "destination_raw",
+    "object_value_raw", "actor_id_raw", "object_id_raw", "pid_raw", "ppid_raw",
+    "tid_raw", "principal_raw",
+}
+_DISCOVERY_FIELDS = {"properties_keys_raw", "unmapped_property_keys_raw"}
+
+# Object-specific fields → object types where the field is expected to apply.
+# Decisions use missingness among applicable rows, not the full sample.
+_OBJECT_SPECIFIC_APPLICABLE: dict[str, list[str]] = {
+    "image_path_raw": ["PROCESS", "FLOW", "FILE", "MODULE", "THREAD", "SHELL"],
+    "parent_image_path_raw": ["PROCESS"],
+    "command_line_raw": ["PROCESS"],
+    "file_path_raw": ["FILE"],
+    "module_path_raw": ["MODULE"],
+    "registry_key_raw": ["REGISTRY"],
+    "registry_value_raw": ["REGISTRY"],
+    "registry_data_raw": ["REGISTRY"],
+    "registry_type_raw": ["REGISTRY"],
+    "generic_path_raw": ["TASK"],
+    "info_class_raw": ["FILE", "THREAD"],
+    "task_name_raw": ["TASK"],
+    "task_pid_raw": ["TASK"],
+    "task_process_uuid_raw": ["TASK"],
+    "property_name_raw": ["SERVICE"],
+    "service_name_raw": ["SERVICE"],
+    "service_type_raw": ["SERVICE"],
+    "service_start_type_raw": ["SERVICE"],
+    "src_ip_raw": ["FLOW"],
+    "src_port_raw": ["FLOW"],
+    "dest_ip_raw": ["FLOW"],
+    "dest_port_raw": ["FLOW"],
+    "direction_raw": ["FLOW"],
+    "protocol_raw": ["FLOW"],
+    "shell_payload_raw": ["SHELL"],
+    "shell_context_raw": ["SHELL"],
+    "logon_id_raw": ["USER_SESSION"],
+    "property_user_raw": ["USER_SESSION"],
+    "privileges_raw": ["USER_SESSION"],
+    "acuity_level_raw": [],  # common across object types; treat as all-rows
+    "thread_src_pid_raw": ["THREAD"],
+    "thread_src_tid_raw": ["THREAD"],
+    "thread_tgt_pid_raw": ["THREAD"],
+    "thread_tgt_tid_raw": ["THREAD"],
+}
+
+# Diagnostic / provenance fields kept even when empty by design.
+_ALWAYS_KEEP_FIELDS = _PROVENANCE_FIELDS | _CONTROL_FIELDS | {
+    "parse_error",  # empty when no parse failures
+}
 
 # Missingness thresholds for keep / review / drop
 _KEEP_THRESH   = 20.0   # < 20 % missing → keep candidate
 _REVIEW_THRESH = 80.0   # 20–80 % missing → review; > 80 % → drop
+
+# Final T3 column order (legacy columns preserved; new columns appended).
+T3_COLUMNS = [
+    "source_type",
+    "field_name",
+    "field_role",
+    "raw_data_type",
+    "parsed_data_type",
+    "total_rows",
+    "applicable_object_types",
+    "applicable_rows",
+    "missing_percent",
+    "missing_percent_overall",
+    "missing_percent_applicable",
+    "unique_count",
+    "top_3_values",
+    "example_value",
+    "reliability_decision_keep_review_drop",
+    "reason",
+]
+
+
+def field_role(field: str) -> str:
+    if field in _PROVENANCE_FIELDS:
+        return "provenance"
+    if field in _CONTROL_FIELDS:
+        return "control"
+    if field in _CORE_FIELDS:
+        return "core"
+    if field in _ENTITY_FIELDS:
+        return "entity"
+    if field in _DISCOVERY_FIELDS:
+        return "discovery"
+    if field in _OBJECT_SPECIFIC_APPLICABLE:
+        return "object_specific"
+    return "entity"
+
+
+def applicable_object_types_for(field: str) -> list[str]:
+    """Return object types where *field* is expected; empty list means ALL rows."""
+    if field not in _OBJECT_SPECIFIC_APPLICABLE:
+        return []
+    return list(_OBJECT_SPECIFIC_APPLICABLE[field])
+
+
+def _decide_reliability(
+    field: str,
+    *,
+    role: str,
+    total_rows: int,
+    applicable_rows: int,
+    missing_pct_overall: float,
+    missing_pct_applicable: float,
+    unique_count: int,
+    n_hosts: int,
+) -> tuple[str, str]:
+    """
+    Keep / review / drop decision for one field.
+
+    Object-specific fields use applicable-row missingness.  Absent applicable
+    object types → review / not assessable (never drop).  Decisions from
+    capped or single-host samples are preliminary.
+    """
+    preliminary = " [preliminary: capped/single-host sample]" if n_hosts <= 1 else ""
+
+    if field in _ALWAYS_KEEP_FIELDS or role in ("provenance", "control"):
+        return "keep", (
+            f"diagnostic/provenance/control field retained by design "
+            f"(overall missing {missing_pct_overall}%){preliminary}"
+        )
+
+    if role == "object_specific" and applicable_object_types_for(field):
+        if applicable_rows == 0:
+            types = ",".join(applicable_object_types_for(field))
+            return "review", (
+                f"not assessable: no rows with object types [{types}] in sample"
+                f"{preliminary}"
+            )
+        decision_pct = missing_pct_applicable
+        pct_label = "applicable"
+    else:
+        decision_pct = missing_pct_overall
+        pct_label = "overall"
+
+    if field == "host_raw" and unique_count <= 1:
+        return "keep", (
+            f"single-host sample ({unique_count} unique host); "
+            f"constant host is not grounds for drop{preliminary}"
+        )
+
+    if decision_pct > _REVIEW_THRESH:
+        return "drop", (
+            f"{decision_pct}% missing ({pct_label}); exceeds drop threshold"
+            f"{preliminary}"
+        )
+
+    # Constancy: require enough applicable (or overall) rows before dropping.
+    constancy_n = (
+        applicable_rows
+        if role == "object_specific" and applicable_object_types_for(field)
+        else total_rows
+    )
+    if unique_count <= 1 and constancy_n > 10 and field != "host_raw":
+        if role == "discovery":
+            return "keep", (
+                f"discovery field retained; {unique_count} unique non-empty value(s)"
+                f"{preliminary}"
+            )
+        return "drop", (
+            f"constant or near-constant field; no discriminative value"
+            f"{preliminary}"
+        )
+
+    if field == "timestamp_parsed" and missing_pct_overall > 50.0:
+        return "review", (
+            f"{missing_pct_overall}% unparseable timestamps; "
+            f"time-series reliability at risk{preliminary}"
+        )
+
+    if decision_pct > _KEEP_THRESH:
+        return "review", (
+            f"{decision_pct}% missing ({pct_label}); verify field mapping before use"
+            f"{preliminary}"
+        )
+
+    return "keep", (
+        f"{decision_pct}% missing ({pct_label}); {unique_count} unique values"
+        f"{preliminary}"
+    )
 
 
 # ── Helper utilities ──────────────────────────────────────────────────────
@@ -133,10 +318,20 @@ def _collection_summary(events: list, max_members: int) -> tuple:
 
 # ── T3: Field Reliability Audit ──────────────────────────────────────────
 
+def _object_upper_series(subset):
+    """Normalize object_raw for applicability matching."""
+    import pandas as pd
+    if "object_raw" not in subset.columns:
+        return pd.Series([""] * len(subset), index=subset.index)
+    return subset["object_raw"].fillna("").astype(str).str.strip().str.upper()
+
+
 def compute_t3(events: list, source_types: list) -> list:
     """
-    For each (source_type, field_name) pair, compute missingness, unique count,
-    top-3 values, example value, dominant type, and keep/review/drop decision.
+    For each (source_type, field_name) pair over SLIM_EVENT_COLUMNS, compute
+    missingness (overall + applicable), unique count, top-3 values, and a
+    keep/review/drop decision.  Object-specific fields are scored on applicable
+    object rows only.
     """
     import pandas as pd
 
@@ -144,80 +339,103 @@ def compute_t3(events: list, source_types: list) -> list:
         return []
 
     df = pd.DataFrame(events)
-    rows = []
+    for col in _AUDIT_FIELDS:
+        if col not in df.columns:
+            df[col] = ""
 
+    if "host_raw" in df.columns:
+        n_hosts = int(
+            df["host_raw"].fillna("").astype(str).str.strip()
+            .replace("", pd.NA).nunique(dropna=True)
+        )
+    else:
+        n_hosts = 0
+
+    rows = []
     for src in sorted(source_types):
         subset = df[df["source_type"] == src] if src != "_all_" else df
         if subset.empty:
             continue
 
-        for field in _AUDIT_FIELDS:
-            if field not in subset.columns:
-                continue
+        obj_upper = _object_upper_series(subset)
+        total = len(subset)
 
-            col     = subset[field]
-            total   = len(col)
-            missing = int(col.apply(_is_missing).sum())
-            missing_pct = round(missing / max(total, 1) * 100, 1)
+        for field in _AUDIT_FIELDS:
+            role = field_role(field)
+            appl_types = applicable_object_types_for(field)
+            appl_types_str = ",".join(appl_types) if appl_types else "ALL"
+
+            col = subset[field]
+            missing_overall = int(col.apply(_is_missing).sum())
+            missing_pct_overall = round(missing_overall / max(total, 1) * 100, 1)
+
+            if appl_types:
+                mask = obj_upper.isin(appl_types)
+                applicable_rows = int(mask.sum())
+                if applicable_rows > 0:
+                    miss_app = int(col[mask].apply(_is_missing).sum())
+                    missing_pct_applicable = round(
+                        miss_app / applicable_rows * 100, 1
+                    )
+                else:
+                    missing_pct_applicable = 100.0
+            else:
+                applicable_rows = total
+                missing_pct_applicable = missing_pct_overall
 
             non_null = col[~col.apply(_is_missing)].astype(str)
             unique_count = int(non_null.nunique())
-
-            ctr   = collections.Counter(non_null.tolist())
-            top3  = "; ".join(f"{v}({c})" for v, c in ctr.most_common(3))
+            ctr = collections.Counter(non_null.tolist())
+            top3 = "; ".join(f"{v}({c})" for v, c in ctr.most_common(3))
             example = non_null.iloc[0] if len(non_null) > 0 else ""
 
-            # Dominant raw data type from the original event dicts
             raw_types = [
                 type(e.get(field)).__name__
                 for e in events
                 if e.get("source_type") == src and not _is_missing(e.get(field))
             ][:200]
-            if raw_types:
-                raw_data_type = collections.Counter(raw_types).most_common(1)[0][0]
-            else:
-                raw_data_type = "unknown"
+            raw_data_type = (
+                collections.Counter(raw_types).most_common(1)[0][0]
+                if raw_types else "unknown"
+            )
 
-            # Parsed data type: for timestamp_parsed → datetime-like; else str
             if field == "timestamp_parsed":
-                parsed_data_type = "datetime_str_iso" if unique_count > 1 else "unparseable"
-            elif field in ("timestamp_raw",):
+                parsed_data_type = (
+                    "datetime_str_iso" if unique_count > 1 else "unparseable"
+                )
+            elif field == "timestamp_raw":
                 parsed_data_type = "numeric_epoch_or_str"
             else:
                 parsed_data_type = "str"
 
-            # Keep / review / drop decision
-            if field in ("source_type", "parse_status", "archive_name"):
-                decision = "keep"
-                reason   = "control/provenance field; always present"
-            elif missing_pct > _REVIEW_THRESH:
-                decision = "drop"
-                reason   = f"{missing_pct}% missing; exceeds drop threshold"
-            elif unique_count <= 1 and total > 10:
-                decision = "drop"
-                reason   = "constant or near-constant field; no discriminative value"
-            elif field in ("timestamp_parsed",) and missing_pct > 50.0:
-                decision = "review"
-                reason   = f"{missing_pct}% unparseable timestamps; time-series reliability at risk"
-            elif missing_pct > _KEEP_THRESH:
-                decision = "review"
-                reason   = f"{missing_pct}% missing; verify field mapping before use"
-            else:
-                decision = "keep"
-                reason   = f"{missing_pct}% missing; {unique_count} unique values"
+            decision, reason = _decide_reliability(
+                field,
+                role=role,
+                total_rows=total,
+                applicable_rows=applicable_rows,
+                missing_pct_overall=missing_pct_overall,
+                missing_pct_applicable=missing_pct_applicable,
+                unique_count=unique_count,
+                n_hosts=n_hosts,
+            )
 
             rows.append({
-                "source_type"                       : src,
-                "field_name"                        : field,
-                "raw_data_type"                     : raw_data_type,
-                "parsed_data_type"                  : parsed_data_type,
-                "total_rows"                        : total,
-                "missing_percent"                   : missing_pct,
-                "unique_count"                      : unique_count,
-                "top_3_values"                      : top3[:300],
-                "example_value"                     : _safe_str(example, 120),
+                "source_type": src,
+                "field_name": field,
+                "field_role": role,
+                "raw_data_type": raw_data_type,
+                "parsed_data_type": parsed_data_type,
+                "total_rows": total,
+                "applicable_object_types": appl_types_str,
+                "applicable_rows": applicable_rows,
+                "missing_percent": missing_pct_overall,
+                "missing_percent_overall": missing_pct_overall,
+                "missing_percent_applicable": missing_pct_applicable,
+                "unique_count": unique_count,
+                "top_3_values": top3[:300],
+                "example_value": _safe_str(example, 120),
                 "reliability_decision_keep_review_drop": decision,
-                "reason"                            : reason,
+                "reason": reason,
             })
 
     return rows
@@ -487,11 +705,18 @@ def write_readme(
         f"  T4 data quality issue log   : {t4_rows} rows",
         "  F2 timestamp coverage plot  : see F2_timestamp_coverage_plot.png/.pdf",
         "",
-        "T3 reliability decision rules",
-        "------------------------------",
-        "  keep   : < 20% missing AND useful for downstream modeling",
-        "  review : 20–80% missing OR inconsistent type OR uncertain semantics",
-        "  drop   : > 80% missing OR constant/no-information field",
+        "T3 reliability decision rules (schema v2 / SLIM_EVENT_COLUMNS)",
+        "--------------------------------------------------------------",
+        "  Audits every column in SLIM_EVENT_COLUMNS with field_role:",
+        "    provenance | control | core | entity | object_specific | discovery",
+        "  keep   : < 20% missing (overall, or applicable for object-specific)",
+        "  review : 20–80% missing OR not assessable (applicable object absent)",
+        "  drop   : > 80% missing OR constant/no-information (non-host) field",
+        "  Object-specific fields use missing_percent_applicable, not overall.",
+        "  If applicable object types are absent → review / not assessable (never drop).",
+        "  host_raw is never dropped merely because a single-host sample is constant.",
+        "  Diagnostic/provenance fields (e.g. parse_error) are retained even when empty.",
+        "  Decisions from capped or single-host samples are PRELIMINARY.",
         "",
         "T4 severity levels",
         "------------------",
@@ -504,6 +729,7 @@ def write_readme(
         f"  * Pilot sample only — {n_events:,} events from up to {args.max_members} members "
         f"  (max {args.max_events_per_member} events/member).",
         "  * Schema statistics may shift when more members / archives are processed.",
+        "  * Keep/review/drop from capped or single-host samples are preliminary only.",
         "  * Normalized field extraction is best-effort; OpTC ECAR field names vary by version.",
         "  * Ground-truth alignment and attack interval annotation are deferred to EDA 10.",
     ]
@@ -560,7 +786,16 @@ def _duck_conn(cache_dir: pathlib.Path):
 
 
 def compute_t3_from_cache(con) -> list:
-    """T3 via DuckDB aggregates — no full DataFrame materialization."""
+    """T3 via DuckDB aggregates over every SLIM_EVENT_COLUMNS field."""
+    # Discover which slim columns are present in the parquet schema.
+    present = {r[0] for r in con.execute("DESCRIBE SELECT * FROM events").fetchall()}
+    n_hosts = con.execute(
+        """
+        SELECT COUNT(DISTINCT NULLIF(CAST(host_raw AS VARCHAR), ''))
+        FROM events
+        """
+    ).fetchone()[0] if "host_raw" in present else 0
+
     srcs = [r[0] for r in con.execute(
         "SELECT DISTINCT source_type FROM events ORDER BY 1"
     ).fetchall()]
@@ -572,6 +807,49 @@ def compute_t3_from_cache(con) -> list:
         if total == 0:
             continue
         for field in _AUDIT_FIELDS:
+            role = field_role(field)
+            appl_types = applicable_object_types_for(field)
+            appl_types_str = ",".join(appl_types) if appl_types else "ALL"
+
+            if field not in present:
+                # Column absent from cache parquet — still emit a T3 row.
+                decision, reason = _decide_reliability(
+                    field,
+                    role=role,
+                    total_rows=int(total),
+                    applicable_rows=0 if appl_types else int(total),
+                    missing_pct_overall=100.0,
+                    missing_pct_applicable=100.0,
+                    unique_count=0,
+                    n_hosts=int(n_hosts or 0),
+                )
+                if appl_types:
+                    decision, reason = "review", (
+                        "not assessable: column absent from cache parquet"
+                        " [preliminary: capped/single-host sample]"
+                        if int(n_hosts or 0) <= 1 else
+                        "not assessable: column absent from cache parquet"
+                    )
+                rows.append({
+                    "source_type": src,
+                    "field_name": field,
+                    "field_role": role,
+                    "raw_data_type": "unknown",
+                    "parsed_data_type": "str",
+                    "total_rows": int(total),
+                    "applicable_object_types": appl_types_str,
+                    "applicable_rows": 0 if appl_types else int(total),
+                    "missing_percent": 100.0,
+                    "missing_percent_overall": 100.0,
+                    "missing_percent_applicable": 100.0,
+                    "unique_count": 0,
+                    "top_3_values": "",
+                    "example_value": "",
+                    "reliability_decision_keep_review_drop": decision,
+                    "reason": reason,
+                })
+                continue
+
             miss = con.execute(
                 f"""
                 SELECT COUNT(*) FROM events
@@ -580,7 +858,37 @@ def compute_t3_from_cache(con) -> list:
                 """,
                 [src],
             ).fetchone()[0]
-            missing_pct = round(miss / max(total, 1) * 100, 1)
+            missing_pct_overall = round(miss / max(total, 1) * 100, 1)
+
+            if appl_types:
+                type_list = ", ".join(f"'{t}'" for t in appl_types)
+                applicable_rows = con.execute(
+                    f"""
+                    SELECT COUNT(*) FROM events
+                    WHERE source_type = ?
+                      AND UPPER(TRIM(CAST(object_raw AS VARCHAR))) IN ({type_list})
+                    """,
+                    [src],
+                ).fetchone()[0]
+                if applicable_rows > 0:
+                    miss_app = con.execute(
+                        f"""
+                        SELECT COUNT(*) FROM events
+                        WHERE source_type = ?
+                          AND UPPER(TRIM(CAST(object_raw AS VARCHAR))) IN ({type_list})
+                          AND ({field} IS NULL OR CAST({field} AS VARCHAR) = '')
+                        """,
+                        [src],
+                    ).fetchone()[0]
+                    missing_pct_applicable = round(
+                        miss_app / applicable_rows * 100, 1
+                    )
+                else:
+                    missing_pct_applicable = 100.0
+            else:
+                applicable_rows = total
+                missing_pct_applicable = missing_pct_overall
+
             unique_count = con.execute(
                 f"""
                 SELECT COUNT(DISTINCT {field}) FROM events
@@ -603,7 +911,9 @@ def compute_t3_from_cache(con) -> list:
             example = top[0][0] if top else ""
 
             if field == "timestamp_parsed":
-                parsed_data_type = "datetime_str_iso" if unique_count > 1 else "unparseable"
+                parsed_data_type = (
+                    "datetime_str_iso" if unique_count > 1 else "unparseable"
+                )
                 raw_data_type = "str"
             elif field == "timestamp_raw":
                 parsed_data_type = "numeric_epoch_or_str"
@@ -612,26 +922,29 @@ def compute_t3_from_cache(con) -> list:
                 parsed_data_type = "str"
                 raw_data_type = "str"
 
-            if field in ("source_type",):
-                decision, reason = "keep", "control/provenance field; always present"
-            elif missing_pct > _REVIEW_THRESH:
-                decision, reason = "drop", f"{missing_pct}% missing; exceeds drop threshold"
-            elif unique_count <= 1 and total > 10:
-                decision, reason = "drop", "constant or near-constant field; no discriminative value"
-            elif field == "timestamp_parsed" and missing_pct > 50.0:
-                decision, reason = "review", f"{missing_pct}% unparseable timestamps"
-            elif missing_pct > _KEEP_THRESH:
-                decision, reason = "review", f"{missing_pct}% missing; verify field mapping"
-            else:
-                decision, reason = "keep", f"{missing_pct}% missing; {unique_count} unique values"
+            decision, reason = _decide_reliability(
+                field,
+                role=role,
+                total_rows=int(total),
+                applicable_rows=int(applicable_rows),
+                missing_pct_overall=missing_pct_overall,
+                missing_pct_applicable=missing_pct_applicable,
+                unique_count=int(unique_count),
+                n_hosts=int(n_hosts or 0),
+            )
 
             rows.append({
                 "source_type": src,
                 "field_name": field,
+                "field_role": role,
                 "raw_data_type": raw_data_type,
                 "parsed_data_type": parsed_data_type,
                 "total_rows": int(total),
-                "missing_percent": missing_pct,
+                "applicable_object_types": appl_types_str,
+                "applicable_rows": int(applicable_rows),
+                "missing_percent": missing_pct_overall,
+                "missing_percent_overall": missing_pct_overall,
+                "missing_percent_applicable": missing_pct_applicable,
                 "unique_count": int(unique_count),
                 "top_3_values": top3[:300],
                 "example_value": _safe_str(example, 120),
@@ -809,6 +1122,10 @@ def run_eda02_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
     print("\nComputing T3 from cache ...")
     t3_rows = compute_t3_from_cache(con)
     t3_df = pd.DataFrame(t3_rows)
+    if not t3_df.empty:
+        t3_df = t3_df.reindex(columns=T3_COLUMNS)
+    else:
+        t3_df = pd.DataFrame(columns=T3_COLUMNS)
     _save_csv(t3_df, out_dir / "T3_field_reliability_audit.csv",
               tables_dir / "T3_field_reliability_audit.csv")
 
@@ -853,6 +1170,15 @@ def run_eda02_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
         f"  timestamp rule   : {cache_meta.get('timestamp_conversion_rule', 'n/a')}",
         "",
         f"T3 rows: {len(t3_rows)}   T4 issues: {len(t4_rows)}",
+        "",
+        "T3 notes (schema v2)",
+        "--------------------",
+        "  Audits every SLIM_EVENT_COLUMNS field with field_role and",
+        "  overall + applicable missingness. Object-specific decisions use",
+        "  applicable object rows. Absent applicable types → review/not assessable.",
+        "  host_raw is not dropped for single-host constancy. Diagnostic fields",
+        "  (parse_error, etc.) are retained when empty by design.",
+        "  Decisions from capped/single-host samples are PRELIMINARY.",
     ]
     (out_dir / "README_eda02_schema_quality.txt").write_text("\n".join(lines), encoding="utf-8")
     print(f"  [README] {out_dir / 'README_eda02_schema_quality.txt'}")
@@ -950,11 +1276,9 @@ def main() -> None:
     print("\nComputing T3 field reliability audit ...")
     source_types = sorted({e.get("source_type", "unknown") for e in events})
     t3_rows = compute_t3(events, source_types)
-    t3_df = pd.DataFrame(t3_rows) if t3_rows else pd.DataFrame(columns=[
-        "source_type", "field_name", "raw_data_type", "parsed_data_type",
-        "total_rows", "missing_percent", "unique_count", "top_3_values",
-        "example_value", "reliability_decision_keep_review_drop", "reason",
-    ])
+    t3_df = pd.DataFrame(t3_rows) if t3_rows else pd.DataFrame(columns=T3_COLUMNS)
+    if not t3_df.empty:
+        t3_df = t3_df.reindex(columns=T3_COLUMNS)
     _save_csv(t3_df,
               out_dir / "T3_field_reliability_audit.csv",
               tables_dir / "T3_field_reliability_audit.csv")

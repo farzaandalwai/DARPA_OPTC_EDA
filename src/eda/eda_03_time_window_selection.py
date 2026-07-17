@@ -61,6 +61,249 @@ _ENTITY_COLS = {
     "unique_users"       : "user_raw",
 }
 
+# Provisional coverage gates before primary/backup window recommendations.
+# Documented minimums for a reliable multi-host, multi-day window choice.
+_COVERAGE_MIN_HOSTS = 2
+_COVERAGE_MIN_MEMBERS = 3
+_COVERAGE_MIN_DATES = 2
+_COVERAGE_MIN_SPAN_HOURS = 24.0
+_COVERAGE_MIN_PARSEABLE_PCT = 95.0
+
+
+def assess_coverage_metrics(
+    *,
+    n_events: int,
+    n_parseable: int,
+    unique_archives: int,
+    unique_members: int,
+    unique_hosts: int,
+    unique_dates: int,
+    span_hours: float,
+) -> dict:
+    """
+    Evaluate provisional coverage gates for window recommendations.
+
+    Returns a dict with metrics, failed_conditions (list[str]), and
+    status in {"ok", "review_needed"}.
+    """
+    parseable_pct = round(n_parseable / max(n_events, 1) * 100, 1)
+    metrics = {
+        "unique_archives": int(unique_archives),
+        "unique_members": int(unique_members),
+        "unique_hosts": int(unique_hosts),
+        "unique_dates": int(unique_dates),
+        "span_hours": round(float(span_hours), 2),
+        "parseable_timestamp_percent": parseable_pct,
+        "n_events": int(n_events),
+        "n_parseable": int(n_parseable),
+    }
+    failed = []
+    if metrics["unique_hosts"] < _COVERAGE_MIN_HOSTS:
+        failed.append(
+            f"unique_hosts={metrics['unique_hosts']} < {_COVERAGE_MIN_HOSTS}"
+        )
+    if metrics["unique_members"] < _COVERAGE_MIN_MEMBERS:
+        failed.append(
+            f"unique_members={metrics['unique_members']} < {_COVERAGE_MIN_MEMBERS}"
+        )
+    if metrics["unique_dates"] < _COVERAGE_MIN_DATES:
+        failed.append(
+            f"unique_dates={metrics['unique_dates']} < {_COVERAGE_MIN_DATES}"
+        )
+    if metrics["span_hours"] < _COVERAGE_MIN_SPAN_HOURS:
+        failed.append(
+            f"span_hours={metrics['span_hours']} < {_COVERAGE_MIN_SPAN_HOURS}"
+        )
+    if metrics["parseable_timestamp_percent"] < _COVERAGE_MIN_PARSEABLE_PCT:
+        failed.append(
+            f"parseable_timestamp_percent={metrics['parseable_timestamp_percent']} "
+            f"< {_COVERAGE_MIN_PARSEABLE_PCT}"
+        )
+    metrics["failed_conditions"] = failed
+    metrics["status"] = "ok" if not failed else "review_needed"
+    return metrics
+
+
+def assess_coverage_from_df(df, n_events: int, n_parseable: int) -> dict:
+    """Coverage metrics from an in-memory event DataFrame."""
+    import pandas as pd
+
+    if df is None or df.empty:
+        return assess_coverage_metrics(
+            n_events=n_events, n_parseable=n_parseable,
+            unique_archives=0, unique_members=0, unique_hosts=0,
+            unique_dates=0, span_hours=0.0,
+        )
+
+    def _nunique(col):
+        if col not in df.columns:
+            return 0
+        s = df[col].fillna("").astype(str).str.strip()
+        return int(s[s != ""].nunique())
+
+    unique_archives = _nunique("archive_name")
+    unique_members = _nunique("member_name")
+    unique_hosts = _nunique("host_raw")
+
+    ts = df["ts"] if "ts" in df.columns else pd.Series(dtype="datetime64[ns]")
+    ts_ok = ts.dropna()
+    if len(ts_ok) == 0:
+        unique_dates = 0
+        span_hours = 0.0
+    else:
+        unique_dates = int(ts_ok.dt.floor("D").nunique())
+        span_hours = float((ts_ok.max() - ts_ok.min()).total_seconds() / 3600.0)
+
+    return assess_coverage_metrics(
+        n_events=n_events,
+        n_parseable=n_parseable,
+        unique_archives=unique_archives,
+        unique_members=unique_members,
+        unique_hosts=unique_hosts,
+        unique_dates=unique_dates,
+        span_hours=span_hours,
+    )
+
+
+def assess_coverage_from_cache(con, n_events: int, n_parseable: int) -> dict:
+    """Coverage metrics via DuckDB over the normalized cache."""
+    row = con.execute(
+        """
+        SELECT
+          COUNT(DISTINCT NULLIF(CAST(archive_name AS VARCHAR), '')),
+          COUNT(DISTINCT NULLIF(CAST(member_name AS VARCHAR), '')),
+          COUNT(DISTINCT NULLIF(CAST(host_raw AS VARCHAR), '')),
+          COUNT(DISTINCT date_trunc(
+              'day', TRY_CAST(timestamp_parsed AS TIMESTAMP))),
+          MIN(TRY_CAST(timestamp_parsed AS TIMESTAMP)),
+          MAX(TRY_CAST(timestamp_parsed AS TIMESTAMP))
+        FROM events
+        WHERE timestamp_parsed IS NOT NULL
+          AND CAST(timestamp_parsed AS VARCHAR) != ''
+        """
+    ).fetchone()
+    n_arch, n_mem, n_hosts, n_dates, tmin, tmax = row
+    # Archives/members/hosts should count all rows, not only parseable ts.
+    n_arch_all = con.execute(
+        "SELECT COUNT(DISTINCT NULLIF(CAST(archive_name AS VARCHAR), '')) FROM events"
+    ).fetchone()[0]
+    n_mem_all = con.execute(
+        "SELECT COUNT(DISTINCT NULLIF(CAST(member_name AS VARCHAR), '')) FROM events"
+    ).fetchone()[0]
+    n_hosts_all = con.execute(
+        "SELECT COUNT(DISTINCT NULLIF(CAST(host_raw AS VARCHAR), '')) FROM events"
+    ).fetchone()[0]
+    span_hours = 0.0
+    if tmin is not None and tmax is not None:
+        span_hours = (tmax - tmin).total_seconds() / 3600.0
+    return assess_coverage_metrics(
+        n_events=n_events,
+        n_parseable=n_parseable,
+        unique_archives=int(n_arch_all or 0),
+        unique_members=int(n_mem_all or 0),
+        unique_hosts=int(n_hosts_all or 0),
+        unique_dates=int(n_dates or 0),
+        span_hours=float(span_hours),
+    )
+
+
+def _apply_window_recommendations(rows: list, coverage: dict) -> list:
+    """
+    Assign primary/backup/no (or review_needed) on T5 rows.
+
+    If coverage gates fail, every window is marked review_needed and no
+    primary/backup is issued.
+    """
+    if not rows:
+        return rows
+
+    if coverage.get("status") != "ok":
+        failed = coverage.get("failed_conditions") or ["coverage gates failed"]
+        detail = "; ".join(failed)
+        for r in rows:
+            r["recommendation_primary_backup_no"] = "review_needed"
+            r["reason"] = (
+                "coverage reliability gate failed — no primary/backup window; "
+                f"failed: {detail}"
+            )
+        return rows
+
+    qualify = [
+        r for r in rows
+        if isinstance(r["empty_window_percent"], float)
+        and r["empty_window_percent"] < 50.0
+        and isinstance(r["median_events_per_window"], float)
+        and r["median_events_per_window"] >= 5.0
+    ]
+    if not qualify:
+        for r in rows:
+            r["recommendation_primary_backup_no"] = "review_needed"
+            r["reason"] = (
+                "data too sparse for reliable window selection; "
+                "review timestamp quality and increase sample before recommending"
+            )
+        return rows
+
+    primary_ws = qualify[0]["window_size"]
+    backup_ws = qualify[1]["window_size"] if len(qualify) > 1 else "1h"
+    for r in rows:
+        ws = r["window_size"]
+        if ws == primary_ws:
+            r["recommendation_primary_backup_no"] = "primary"
+            r["reason"] = (
+                f"smallest window with <50% empty ({r['empty_window_percent']}%) "
+                f"and median {r['median_events_per_window']} events/window; "
+                "supports fine-grained drift analysis"
+            )
+        elif ws == backup_ws:
+            r["recommendation_primary_backup_no"] = "backup"
+            r["reason"] = (
+                f"fallback if primary is too granular; "
+                f"empty_window_percent={r['empty_window_percent']}%"
+            )
+        else:
+            r["recommendation_primary_backup_no"] = "no"
+            if ws in _WINDOW_SIZES[:_WINDOW_SIZES.index(primary_ws)]:
+                r["reason"] = (
+                    f"too fine-grained: {r.get('empty_window_percent', '?')}% empty "
+                    f"or <5 median events; primary {primary_ws} is preferred"
+                )
+            else:
+                r["reason"] = (
+                    f"coarser than backup {backup_ws}; "
+                    f"use only if dataset is very sparse"
+                )
+    return rows
+
+
+def format_coverage_block(coverage: dict) -> list[str]:
+    """Human-readable coverage gate section for N1 / README."""
+    lines = [
+        "Coverage reliability gate (provisional minimums)",
+        "------------------------------------------------",
+        f"  unique_archives              : {coverage.get('unique_archives', 0)}",
+        f"  unique_members               : {coverage.get('unique_members', 0)} "
+        f"(min {_COVERAGE_MIN_MEMBERS})",
+        f"  unique_hosts                 : {coverage.get('unique_hosts', 0)} "
+        f"(min {_COVERAGE_MIN_HOSTS})",
+        f"  unique_dates                 : {coverage.get('unique_dates', 0)} "
+        f"(min {_COVERAGE_MIN_DATES})",
+        f"  timestamp_span_hours         : {coverage.get('span_hours', 0)} "
+        f"(min {_COVERAGE_MIN_SPAN_HOURS})",
+        f"  parseable_timestamp_percent  : "
+        f"{coverage.get('parseable_timestamp_percent', 0)} "
+        f"(min {_COVERAGE_MIN_PARSEABLE_PCT})",
+        f"  gate_status                  : {coverage.get('status', 'unknown')}",
+    ]
+    failed = coverage.get("failed_conditions") or []
+    if failed:
+        lines.append("  failed_conditions:")
+        for cond in failed:
+            lines.append(f"    - {cond}")
+    else:
+        lines.append("  failed_conditions: (none)")
+    return lines
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -166,7 +409,7 @@ def _collection_summary(events: list, max_members: int) -> tuple:
 
 # ── T5: Window Size Comparison ────────────────────────────────────────────
 
-def compute_t5(df, pilot_label: str) -> list:
+def compute_t5(df, pilot_label: str, coverage: dict | None = None) -> list:
     """
     For each candidate window, compute event-volume and entity-diversity stats.
     Returns list of dicts with the exact T5 column schema.
@@ -234,63 +477,8 @@ def compute_t5(df, pilot_label: str) -> list:
                 "reason"                     : f"computation_error: {exc}",
             })
 
-    # ── Recommendation logic ──────────────────────────────────────────
-    # Primary: smallest window where empty_window_percent < 50 %
-    #          AND median_events_per_window >= 5
-    # Backup : next larger qualifying window, or 1h as fallback
-    qualify = [
-        r for r in rows
-        if isinstance(r["empty_window_percent"], float)
-        and r["empty_window_percent"] < 50.0
-        and isinstance(r["median_events_per_window"], float)
-        and r["median_events_per_window"] >= 5.0
-    ]
-
-    if not qualify:
-        # All sparse — flag as review needed
-        for r in rows:
-            r["recommendation_primary_backup_no"] = "no"
-            r["reason"] = (
-                "data too sparse for reliable window selection; "
-                "review timestamp quality and increase max_events before recommending"
-            )
-    else:
-        # Recommend smallest qualifying window as primary
-        primary_ws   = qualify[0]["window_size"]
-        backup_ws    = qualify[1]["window_size"] if len(qualify) > 1 else "1h"
-
-        for r in rows:
-            ws = r["window_size"]
-            if ws == primary_ws:
-                r["recommendation_primary_backup_no"] = "primary"
-                r["reason"] = (
-                    f"smallest window with <50% empty ({r['empty_window_percent']}%) "
-                    f"and median {r['median_events_per_window']} events/window; "
-                    "supports fine-grained drift analysis"
-                )
-            elif ws == backup_ws:
-                r["recommendation_primary_backup_no"] = "backup"
-                r["reason"] = (
-                    f"fallback if primary is too granular; "
-                    f"empty_window_percent={r['empty_window_percent']}%"
-                )
-            else:
-                empty_p = r.get("empty_window_percent", "?")
-                med_ev  = r.get("median_events_per_window", "?")
-                if ws in [_WINDOW_SIZES[i] for i in range(_WINDOW_SIZES.index(primary_ws))]:
-                    r["recommendation_primary_backup_no"] = "no"
-                    r["reason"] = (
-                        f"too fine-grained: {empty_p}% empty windows or "
-                        f"<5 median events; primary {primary_ws} is preferred"
-                    )
-                else:
-                    r["recommendation_primary_backup_no"] = "no"
-                    r["reason"] = (
-                        f"coarser than backup {backup_ws}; "
-                        f"use only if dataset is very sparse"
-                    )
-
-    return rows
+    # Recommendation (coverage gate first, then density rules)
+    return _apply_window_recommendations(rows, coverage or {"status": "ok"})
 
 
 # ── F3: Event Volume Over Time ────────────────────────────────────────────
@@ -389,12 +577,21 @@ def plot_f4(df, out_dir: pathlib.Path, figures_dir: pathlib.Path,
 # ── N1: Window Recommendation Note ───────────────────────────────────────
 
 def write_n1(t5_rows: list, out_dir: pathlib.Path, pilot_label: str,
-             n_events: int, n_parseable: int, ts_rule: str) -> None:
+             n_events: int, n_parseable: int, ts_rule: str,
+             coverage: Optional[dict] = None) -> tuple:
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    coverage = coverage or {}
     primary_row  = next((r for r in t5_rows if r.get("recommendation_primary_backup_no") == "primary"), None)
     backup_row   = next((r for r in t5_rows if r.get("recommendation_primary_backup_no") == "backup"), None)
-    primary_ws   = primary_row["window_size"]  if primary_row else "review_needed"
-    backup_ws    = backup_row["window_size"]   if backup_row  else "review_needed"
+    if coverage.get("status") == "review_needed" or (
+        primary_row is None and any(
+            r.get("recommendation_primary_backup_no") == "review_needed" for r in t5_rows
+        )
+    ):
+        primary_ws = backup_ws = "review_needed"
+    else:
+        primary_ws   = primary_row["window_size"]  if primary_row else "review_needed"
+        backup_ws    = backup_row["window_size"]   if backup_row  else "review_needed"
 
     lines = [
         "N1 — Window Size Recommendation",
@@ -408,6 +605,10 @@ def write_n1(t5_rows: list, out_dir: pathlib.Path, pilot_label: str,
         f"  Events with parseable timestamps: {n_parseable:,} / {n_events:,} "
         f"({n_parseable/max(n_events,1)*100:.1f}%)",
         "",
+    ]
+    lines += format_coverage_block(coverage)
+    lines += [
+        "",
         "Recommendation",
         "--------------",
         f"  Primary window : {primary_ws}",
@@ -417,12 +618,21 @@ def write_n1(t5_rows: list, out_dir: pathlib.Path, pilot_label: str,
 
     if primary_ws == "review_needed":
         lines += [
-            "  *** REVIEW NEEDED ***",
-            "  The pilot data is too sparse or has too many unparseable timestamps",
-            "  to make a reliable window recommendation.  Please:",
-            "    1. Increase --max-events (try 500,000+) or --max-members (try 50+).",
-            "    2. Verify that timestamp fields are correctly mapped in the parser.",
-            "    3. Re-run EDA 3 after acquiring more archive data.",
+            "  *** REVIEW NEEDED — no primary/backup window issued ***",
+            "  Coverage reliability gates and/or window density rules were not met.",
+            "  T5 metrics and F3/F4 figures are still produced for inspection.",
+        ]
+        failed = coverage.get("failed_conditions") or []
+        if failed:
+            lines.append("  Failed coverage conditions:")
+            for cond in failed:
+                lines.append(f"    - {cond}")
+        lines += [
+            "  Next steps:",
+            "    1. Expand the pilot to ≥2 hosts, ≥3 members, ≥2 calendar dates,",
+            "       ≥24 hours of timestamp span, and ≥95% parseable timestamps.",
+            "    2. Re-run EDA 3 after acquiring a broader multi-host / multi-day sample.",
+            "    3. Do not treat 1min/5min density on a single-member sample as final.",
         ]
     else:
         if primary_row:
@@ -475,8 +685,10 @@ def write_readme(
     backup_ws: str,
     ts_rule: str,
     member_summary: str = "",
+    coverage: Optional[dict] = None,
 ) -> None:
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    coverage = coverage or {}
     lines = [
         "EDA 3 — Time Alignment and Window Selection",
         "=" * 50,
@@ -505,11 +717,17 @@ def write_readme(
         f"  Parseable: {n_parseable:,} / {n_events:,} "
         f"({n_parseable/max(n_events,1)*100:.1f}%)",
         "",
+    ]
+    lines += format_coverage_block(coverage)
+    lines += [
+        "",
         "Window recommendation",
         "---------------------",
         f"  Primary : {primary_ws}",
         f"  Backup  : {backup_ws}",
         "  (see N1_window_recommendation_note.txt for full rationale)",
+        "  Primary/backup are issued ONLY when all coverage gates pass.",
+        "  Otherwise status is review_needed (T5/figures still generated).",
         "",
         "Candidate windows evaluated",
         "---------------------------",
@@ -528,6 +746,8 @@ def write_readme(
         f"  * Pilot sample only — {n_events:,} events, ≤{args.max_members} members/archive "
         f"(max {args.max_events_per_member} events/member).",
         "  * Window statistics may shift with larger samples.",
+        "  * A 10K single-member / single-host sample must yield review_needed,",
+        "    not a final 1min/5min recommendation.",
         "  * Gradual drift analysis requires more archives (2019-09-19 through 2019-09-24 pending).",
         "  * Ground-truth alignment and attack-interval annotation are deferred to EDA 10.",
     ]
@@ -596,7 +816,7 @@ def _duck_conn(cache_dir: pathlib.Path):
     return con
 
 
-def compute_t5_from_cache(con) -> list:
+def compute_t5_from_cache(con, coverage: dict | None = None) -> list:
     """Window comparison via DuckDB time buckets — no full event DataFrame."""
     import numpy as np
 
@@ -662,42 +882,7 @@ def compute_t5_from_cache(con) -> list:
             "reason": "pending",
         })
 
-    # Recommendation (same rules as compute_t5)
-    qualify = [
-        r for r in rows
-        if isinstance(r["empty_window_percent"], float)
-        and r["empty_window_percent"] < 50.0
-        and isinstance(r["median_events_per_window"], float)
-        and r["median_events_per_window"] >= 5.0
-    ]
-    if not qualify:
-        for r in rows:
-            r["recommendation_primary_backup_no"] = "no"
-            r["reason"] = (
-                "data too sparse for reliable window selection; "
-                "review timestamp quality before recommending"
-            )
-    else:
-        primary_ws = qualify[0]["window_size"]
-        backup_ws = qualify[1]["window_size"] if len(qualify) > 1 else "1h"
-        for r in rows:
-            ws = r["window_size"]
-            if ws == primary_ws:
-                r["recommendation_primary_backup_no"] = "primary"
-                r["reason"] = (
-                    f"smallest window with <50% empty ({r['empty_window_percent']}%) "
-                    f"and median {r['median_events_per_window']} events/window"
-                )
-            elif ws == backup_ws:
-                r["recommendation_primary_backup_no"] = "backup"
-                r["reason"] = (
-                    f"fallback if primary is too granular; "
-                    f"empty_window_percent={r['empty_window_percent']}%"
-                )
-            else:
-                r["recommendation_primary_backup_no"] = "no"
-                r["reason"] = f"not selected; primary={primary_ws}, backup={backup_ws}"
-    return rows
+    return _apply_window_recommendations(rows, coverage or {"status": "ok"})
 
 
 def plot_f3_from_cache(con, out_dir, figures_dir, window_label, pilot_label) -> None:
@@ -831,8 +1016,13 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
     ).fetchone()[0]
     print(f"[INFO] Cache events: {n_total:,}; parseable timestamps: {n_parseable:,}")
 
+    coverage = assess_coverage_from_cache(con, n_total, n_parseable)
+    print(f"[INFO] Coverage gate: {coverage['status']}")
+    for cond in coverage.get("failed_conditions") or []:
+        print(f"  - failed: {cond}")
+
     print("\nComputing T5 from cache ...")
-    t5_rows = compute_t5_from_cache(con)
+    t5_rows = compute_t5_from_cache(con, coverage=coverage)
     t5_df = pd.DataFrame(t5_rows) if t5_rows else pd.DataFrame(columns=[
         "window_size", "number_of_windows", "median_events_per_window",
         "mean_events_per_window", "empty_window_percent",
@@ -846,6 +1036,7 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
         (r for r in t5_rows if r.get("recommendation_primary_backup_no") == "primary"),
         None,
     )
+    # Figures still generated when review_needed; default plot window 15min.
     primary_ws = primary_row["window_size"] if primary_row else "15min"
 
     print("\nGenerating F3/F4 from cache ...")
@@ -854,7 +1045,8 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
 
     if t5_rows:
         primary_ws_final, backup_ws_final = write_n1(
-            t5_rows, out_dir, pilot_label, n_total, n_parseable, ts_rule
+            t5_rows, out_dir, pilot_label, n_total, n_parseable, ts_rule,
+            coverage=coverage,
         )
     else:
         primary_ws_final = backup_ws_final = "review_needed"
@@ -878,6 +1070,13 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
         f"Timestamp rule   : {ts_rule}",
         f"Primary window   : {primary_ws_final}",
         f"Backup window    : {backup_ws_final}",
+        "",
+    ]
+    lines += format_coverage_block(coverage)
+    lines += [
+        "",
+        "Primary/backup are issued ONLY when all coverage gates pass;",
+        "otherwise review_needed (T5 and figures are still generated).",
     ]
     (out_dir / "README_eda03_time_alignment.txt").write_text(
         "\n".join(lines), encoding="utf-8"
@@ -889,6 +1088,7 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
     print(f"EDA 3 COMPLETE  {pilot_label}")
     print(f"  Events total         : {n_total:,}")
     print(f"  Events with valid ts : {n_parseable:,}")
+    print(f"  Coverage gate        : {coverage['status']}")
     print(f"  Recommended window   : {primary_ws_final} (backup: {backup_ws_final})")
     print(f"{'='*60}")
 
@@ -974,8 +1174,13 @@ def main() -> None:
     if df.empty:
         print("[WARN] No events — T5/F3/F4 will be empty.", file=sys.stderr)
 
+    coverage = assess_coverage_from_df(df, n_total, n_parseable)
+    print(f"[INFO] Coverage gate: {coverage['status']}")
+    for cond in coverage.get("failed_conditions") or []:
+        print(f"  - failed: {cond}")
+
     print("\nComputing T5 window size comparison ...")
-    t5_rows = compute_t5(df, pilot_label) if not df.empty else []
+    t5_rows = compute_t5(df, pilot_label, coverage=coverage) if not df.empty else []
     t5_df = pd.DataFrame(t5_rows) if t5_rows else pd.DataFrame(columns=[
         "window_size", "number_of_windows", "median_events_per_window",
         "mean_events_per_window", "empty_window_percent",
@@ -1002,13 +1207,15 @@ def main() -> None:
     print("\nWriting N1 window recommendation ...")
     if t5_rows:
         primary_ws_final, backup_ws_final = write_n1(
-            t5_rows, out_dir, pilot_label, n_total, n_parseable, ts_rule
+            t5_rows, out_dir, pilot_label, n_total, n_parseable, ts_rule,
+            coverage=coverage,
         )
     else:
         primary_ws_final = backup_ws_final = "review_needed"
         (out_dir / "N1_window_recommendation_note.txt").write_text(
             "N1 — Window Size Recommendation\n" + "=" * 40 + "\n"
-            "No events parsed; cannot make a recommendation.\n",
+            "No events parsed; cannot make a recommendation.\n\n"
+            + "\n".join(format_coverage_block(coverage)) + "\n",
             encoding="utf-8",
         )
 
@@ -1016,12 +1223,14 @@ def main() -> None:
         out_dir, args, n_total, n_parseable,
         pilot_label, primary_ws_final, backup_ws_final, ts_rule,
         member_summary=_summary_text,
+        coverage=coverage,
     )
 
     print(f"\n{'='*60}")
     print(f"EDA 3 COMPLETE  {pilot_label}")
     print(f"  Events total            : {n_total:,}")
     print(f"  Events with valid ts    : {n_parseable:,}")
+    print(f"  Coverage gate           : {coverage['status']}")
     print(f"  Recommended window      : {primary_ws_final}  (backup: {backup_ws_final})")
     print(f"{'='*60}")
 
