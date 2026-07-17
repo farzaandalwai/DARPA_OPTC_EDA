@@ -67,7 +67,7 @@ _EP_KW  = {"ecar", "endpoint", "sysclient", "process", "file_event",
            "registry", "sysmon", "edr", "host", ".ecar"}
 
 # Schema version for slim normalized cache
-SCHEMA_VERSION = "optc_normalized_v2"
+SCHEMA_VERSION = "optc_normalized_v3"
 
 # Exact nested properties.* keys → cache column names (OpTC ECAR)
 _PROPERTY_COLUMN_MAP = {
@@ -104,10 +104,28 @@ _PROPERTY_COLUMN_MAP = {
     "src_tid": "thread_src_tid_raw",
     "tgt_pid": "thread_tgt_pid_raw",
     "tgt_tid": "thread_tgt_tid_raw",
+    # v3 promotions (evidence-backed formerly-unmapped keys)
+    "size": "property_size_raw",
+    "base_address": "base_address_raw",
+    "stack_base": "stack_base_raw",
+    "subprocess_tag": "subprocess_tag_raw",
+    "stack_limit": "stack_limit_raw",
+    "start_address": "start_address_raw",
+    "user_stack_base": "user_stack_base_raw",
+    "user_stack_limit": "user_stack_limit_raw",
+    "end_time": "flow_end_time_raw",
+    "start_time": "flow_start_time_raw",
+    "new_path": "new_path_raw",
+    "sid": "process_sid_raw",
+    "tgt_pid_uuid": "thread_tgt_pid_uuid_raw",
+    "requesting_logon_id": "requesting_logon_id_raw",
+    "requesting_domain": "requesting_domain_raw",
+    "requesting_user": "requesting_user_raw",
+    "user_name": "task_user_name_raw",
 }
 
 # Slim columns written to normalized cache (no full raw_json).
-# Order is stable and documented as schema optc_normalized_v2.
+# Order is stable and documented as schema optc_normalized_v3.
 SLIM_EVENT_COLUMNS = [
     # Evidence / provenance
     "file_id",
@@ -172,6 +190,24 @@ SLIM_EVENT_COLUMNS = [
     "thread_src_tid_raw",
     "thread_tgt_pid_raw",
     "thread_tgt_tid_raw",
+    # v3 promoted properties.*
+    "property_size_raw",
+    "base_address_raw",
+    "stack_base_raw",
+    "subprocess_tag_raw",
+    "stack_limit_raw",
+    "start_address_raw",
+    "user_stack_base_raw",
+    "user_stack_limit_raw",
+    "flow_end_time_raw",
+    "flow_start_time_raw",
+    "new_path_raw",
+    "process_sid_raw",
+    "thread_tgt_pid_uuid_raw",
+    "requesting_logon_id_raw",
+    "requesting_domain_raw",
+    "requesting_user_raw",
+    "task_user_name_raw",
     # Schema discovery
     "properties_keys_raw",
     "unmapped_property_keys_raw",
@@ -312,7 +348,7 @@ def normalize_event(
     include_raw_json: bool = True,
 ) -> dict:
     """
-    Build a flat normalized event dict (schema optc_normalized_v2).
+    Build a flat normalized event dict (schema optc_normalized_v3).
 
     Top-level OpTC identifiers are captured exactly. Nested ``properties``
     keys are selectively mapped; unmapped keys are recorded in

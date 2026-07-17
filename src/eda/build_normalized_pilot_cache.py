@@ -47,7 +47,7 @@ TIMESTAMP_RULE = (
 )
 
 SCHEMA_NOTES = (
-    "Schema optc_normalized_v2 selectively normalizes nested OpTC "
+    "Schema optc_normalized_v3 selectively normalizes nested OpTC "
     "properties.* keys into dedicated columns. Unmapped property keys are "
     "recorded in unmapped_property_keys_raw. Derived compatibility fields: "
     "process_raw=properties.image_path (event-associated image path; not "
@@ -55,6 +55,12 @@ SCHEMA_NOTES = (
     "parent_process_raw=properties.parent_image_path; "
     "destination_raw=properties.dest_ip; "
     "user_raw=principal or else properties.user (never actorID). "
+    "v3 promotions from evidence-backed formerly-unmapped keys: "
+    "FILE/FLOW size (property_size_raw); MODULE base_address; "
+    "THREAD stack/address/tag fields (stack_base/limit, start_address, "
+    "user_stack_base/limit, subprocess_tag, tgt_pid_uuid); "
+    "FLOW start_time/end_time; FILE new_path; PROCESS sid; "
+    "USER_SESSION requesting_logon_id/domain/user; TASK user_name. "
     "Full raw_json is excluded; raw events remain recoverable via "
     "archive_name / member_name / line_number / raw_event_id."
 )

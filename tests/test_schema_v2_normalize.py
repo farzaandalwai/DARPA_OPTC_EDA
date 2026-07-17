@@ -1,5 +1,5 @@
 """
-Focused tests for OpTC normalized cache schema v2 (optc_normalized_v2).
+Focused tests for OpTC normalized cache schema (optc_normalized_v3).
 
 Run:
     python3 tests/test_schema_v2_normalize.py
@@ -31,7 +31,7 @@ def _norm(raw: dict, include_raw_json: bool = False) -> dict:
 
 
 def test_schema_version_constant():
-    assert SCHEMA_VERSION == "optc_normalized_v2"
+    assert SCHEMA_VERSION == "optc_normalized_v3"
 
 
 def test_slim_columns_include_v2_fields():

@@ -107,6 +107,24 @@ _OBJECT_SPECIFIC_APPLICABLE: dict[str, list[str]] = {
     "thread_src_tid_raw": ["THREAD"],
     "thread_tgt_pid_raw": ["THREAD"],
     "thread_tgt_tid_raw": ["THREAD"],
+    # v3 promoted properties
+    "property_size_raw": ["FILE", "FLOW"],
+    "base_address_raw": ["MODULE"],
+    "stack_base_raw": ["THREAD"],
+    "subprocess_tag_raw": ["THREAD"],
+    "stack_limit_raw": ["THREAD"],
+    "start_address_raw": ["THREAD"],
+    "user_stack_base_raw": ["THREAD"],
+    "user_stack_limit_raw": ["THREAD"],
+    "flow_start_time_raw": ["FLOW"],
+    "flow_end_time_raw": ["FLOW"],
+    "new_path_raw": ["FILE"],
+    "process_sid_raw": ["PROCESS"],
+    "thread_tgt_pid_uuid_raw": ["THREAD"],
+    "requesting_logon_id_raw": ["USER_SESSION"],
+    "requesting_domain_raw": ["USER_SESSION"],
+    "requesting_user_raw": ["USER_SESSION"],
+    "task_user_name_raw": ["TASK"],
 }
 
 # Diagnostic / provenance fields kept even when empty by design.
