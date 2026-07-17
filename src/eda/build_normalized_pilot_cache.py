@@ -62,8 +62,40 @@ SCHEMA_NOTES = (
 # Max parse-error evidence rows kept in a side CSV
 _MAX_ERROR_EXAMPLES = 500
 
+_SAMPLING_LIMITATION = (
+    "Head-per-member (and global-head) sampling is useful for schema/coverage "
+    "inspection but is not temporally representative for final EDA 3 window "
+    "selection. Prefer a full uncapped cache before issuing primary/backup windows."
+)
 
-def parse_args() -> argparse.Namespace:
+
+def sampling_strategy_for(
+    max_events: Optional[int],
+    max_events_per_member: Optional[int],
+) -> str:
+    """
+    Resolve documented sampling_strategy label.
+    head_per_member takes precedence when both caps are set.
+    """
+    if max_events_per_member is not None:
+        return "head_per_member"
+    if max_events is not None:
+        return "global_head"
+    return "full"
+
+
+def validate_positive_optional_int(name: str, value: Optional[int]) -> None:
+    if value is None:
+        return
+    if value <= 0:
+        print(
+            f"[ERROR] {name} must be a positive integer (got {value}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Build slim normalized Parquet cache from pilot manifest.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -75,12 +107,30 @@ def parse_args() -> argparse.Namespace:
                    help="Default: <project-root>/outputs/cache/pilot_normalized_events")
     p.add_argument("--chunk-size", type=int, default=100_000)
     p.add_argument("--max-events", type=int, default=None,
-                   help="Optional safety cap (default: unlimited)")
+                   help="Optional global safety cap (default: unlimited)")
+    p.add_argument(
+        "--max-events-per-member",
+        type=int,
+        default=None,
+        help=(
+            "Optional deterministic head-per-member sample size "
+            "(default: unlimited). May coexist with --max-events."
+        ),
+    )
+    p.add_argument(
+        "--trust-preverified-manifest",
+        action="store_true",
+        help=(
+            "Skip tar-member verification for this run because the caller "
+            "declares the fixed manifest already preverified. Default is to "
+            "fully verify every allowlisted member."
+        ),
+    )
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--compression", default="zstd",
                    choices=["zstd", "snappy", "gzip", "none"],
                    help="Parquet compression (default: zstd)")
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
 def _disk_free_bytes(path: pathlib.Path) -> Optional[int]:
@@ -118,6 +168,9 @@ def _write_chunk(
 
 def main() -> None:
     args = parse_args()
+    validate_positive_optional_int("--max-events-per-member", args.max_events_per_member)
+    validate_positive_optional_int("--max-events", args.max_events)
+
     project_root = pathlib.Path(args.project_root) if args.project_root else pathlib.Path.cwd()
     corrected_dir = pathlib.Path(args.corrected_dir)
     cache_dir = (pathlib.Path(args.cache_dir) if args.cache_dir
@@ -141,28 +194,61 @@ def main() -> None:
 
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Reject conflicting selection flags (none on this CLI besides max-events)
+    sampling_strategy = sampling_strategy_for(args.max_events, args.max_events_per_member)
     start = datetime.datetime.now(datetime.timezone.utc)
     print(f"\n{'='*60}")
     print("Build Normalized Pilot Cache")
-    print(f"  manifest-csv : {args.manifest_csv}")
-    print(f"  corrected-dir: {corrected_dir}")
-    print(f"  cache-dir    : {cache_dir}")
-    print(f"  chunk-size   : {args.chunk_size}")
-    print(f"  max-events   : {args.max_events if args.max_events is not None else 'unlimited'}")
-    print(f"  compression  : {args.compression}")
+    print(f"  manifest-csv           : {args.manifest_csv}")
+    print(f"  corrected-dir          : {corrected_dir}")
+    print(f"  cache-dir              : {cache_dir}")
+    print(f"  chunk-size             : {args.chunk_size}")
+    print(f"  max-events             : {args.max_events if args.max_events is not None else 'unlimited'}")
+    print(f"  max-events-per-member  : "
+          f"{args.max_events_per_member if args.max_events_per_member is not None else 'unlimited'}")
+    print(f"  sampling_strategy      : {sampling_strategy}")
+    print(f"  trust-preverified      : {bool(args.trust_preverified_manifest)}")
+    print(f"  compression            : {args.compression}")
     print(f"{'='*60}\n")
 
     manifest = load_manifest(pathlib.Path(args.manifest_csv))
     archive_paths = resolve_manifest_archives(manifest, corrected_dir)
-    verify = verify_manifest_members_in_archives(manifest, archive_paths)
 
-    print(f"[INFO] Manifest version : {manifest.manifest_version}")
-    print(f"[INFO] Members          : {manifest.member_count}")
-    print(f"[INFO] Dates            : {manifest.dates}")
-    print(f"[INFO] Hosts            : {len(manifest.hosts)}")
-    print(f"[INFO] Compressed size  : {manifest.total_compressed_gib:.4f} GiB")
-    print(f"[INFO] Matched members  : {verify['matched_member_count']}")
+    if args.trust_preverified_manifest:
+        print(
+            "\n"
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+            "[WARN] --trust-preverified-manifest is set.\n"
+            "       Member verification against tar archives was SKIPPED\n"
+            "       because the caller declared this fixed manifest\n"
+            "       already preverified. Members were NOT verified in\n"
+            "       this run.\n"
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n",
+            flush=True,
+        )
+        member_verification_performed = False
+        member_verification_mode = "trusted_preverified"
+        verify = {
+            "matched_member_count": None,
+            "missing_member_count": None,
+            "verification_skipped": True,
+        }
+        print(f"[INFO] Manifest version : {manifest.manifest_version}")
+        print(f"[INFO] Members          : {manifest.member_count}")
+        print(f"[INFO] Dates            : {manifest.dates}")
+        print(f"[INFO] Hosts            : {len(manifest.hosts)}")
+        print(f"[INFO] Compressed size  : {manifest.total_compressed_gib:.4f} GiB")
+        print("[INFO] Member verification: SKIPPED (trusted_preverified)")
+    else:
+        verify = verify_manifest_members_in_archives(manifest, archive_paths)
+        member_verification_performed = True
+        member_verification_mode = "verified_this_run"
+        print(f"[INFO] Manifest version : {manifest.manifest_version}")
+        print(f"[INFO] Members          : {manifest.member_count}")
+        print(f"[INFO] Dates            : {manifest.dates}")
+        print(f"[INFO] Hosts            : {len(manifest.hosts)}")
+        print(f"[INFO] Compressed size  : {manifest.total_compressed_gib:.4f} GiB")
+        print(f"[INFO] Matched members  : {verify['matched_member_count']} "
+              f"(verified_this_run)")
 
     # Build allowlist map for parser
     allowlist = manifest.allowlist
@@ -204,6 +290,7 @@ def main() -> None:
     for event in stream_from_archives(
         archive_paths,
         max_events=args.max_events,
+        max_events_per_member=args.max_events_per_member,
         allowed_members_by_archive=allowlist,
         include_raw_json=False,
         quiet=False,
@@ -302,8 +389,10 @@ def main() -> None:
         "manifest_version": manifest.manifest_version,
         "schema_version": SCHEMA_VERSION,
         "manifest_member_count": manifest.member_count,
-        "matched_member_count": verify["matched_member_count"],
-        "missing_member_count": verify["missing_member_count"],
+        "matched_member_count": verify.get("matched_member_count"),
+        "missing_member_count": verify.get("missing_member_count"),
+        "member_verification_performed": member_verification_performed,
+        "member_verification_mode": member_verification_mode,
         "members_with_events": len(events_per_member),
         "members_without_events_or_not_reached": len(zero_event_members),
         "capped_early_by_max_events": capped_early,
@@ -320,6 +409,9 @@ def main() -> None:
         "start_time_utc": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "end_time_utc": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "max_events_safety_cap": args.max_events,
+        "max_events_per_member": args.max_events_per_member,
+        "sampling_strategy": sampling_strategy,
+        "sampling_limitation": _SAMPLING_LIMITATION,
         "chunk_size": args.chunk_size,
         "compression": args.compression,
         "include_raw_json": False,
@@ -364,6 +456,11 @@ def main() -> None:
         f"Chunks: {len(chunk_paths)}",
         f"Cache size: {cache_mib:.2f} MiB",
         f"max-events cap: {args.max_events}",
+        f"max-events-per-member: {args.max_events_per_member}",
+        f"sampling_strategy: {sampling_strategy}",
+        f"sampling_limitation: {_SAMPLING_LIMITATION}",
+        f"member_verification_performed: {member_verification_performed}",
+        f"member_verification_mode: {member_verification_mode}",
         "",
         "Timestamp rule:",
         f"  {TIMESTAMP_RULE}",
@@ -385,12 +482,19 @@ def main() -> None:
 
     print(f"\n{'='*60}")
     print("CACHE BUILD COMPLETE")
-    print(f"  Events written     : {total_events:,} (ok={total_ok:,}, err={total_err:,})")
-    print(f"  Chunks             : {len(chunk_paths)}")
-    print(f"  Cache size         : {cache_mib:.2f} MiB")
-    print(f"  Metadata           : {cache_dir / 'cache_metadata.json'}")
-    print(f"  Summary CSV        : {summary_path}")
-    print(f"  Error examples     : {err_path}")
+    print(f"  Events written              : {total_events:,} (ok={total_ok:,}, err={total_err:,})")
+    print(f"  Chunks                      : {len(chunk_paths)}")
+    print(f"  Cache size                  : {cache_mib:.2f} MiB")
+    print(f"  sampling_strategy           : {sampling_strategy}")
+    print(f"  max_events_per_member       : {args.max_events_per_member}")
+    print(f"  max_events_safety_cap       : {args.max_events}")
+    print(f"  member_verification_performed: {member_verification_performed}")
+    print(f"  member_verification_mode    : {member_verification_mode}")
+    print(f"  Metadata                    : {cache_dir / 'cache_metadata.json'}")
+    print(f"  Summary CSV                 : {summary_path}")
+    print(f"  Error examples              : {err_path}")
+    if sampling_strategy != "full":
+        print(f"  [NOTE] {_SAMPLING_LIMITATION}")
     if capped_early:
         print("  [NOTE] Stopped early due to --max-events; not all members may appear.")
     print(f"{'='*60}")

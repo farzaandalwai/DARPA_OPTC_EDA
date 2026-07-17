@@ -124,6 +124,40 @@ def assess_coverage_metrics(
     return metrics
 
 
+_CAPPED_SAMPLING_STRATEGIES = frozenset({"head_per_member", "global_head"})
+_CAPPED_SAMPLING_FAIL = (
+    "sampling_strategy={strategy} is capped head sampling and is not "
+    "temporally representative for final EDA 3 window selection"
+)
+
+
+def apply_sampling_strategy_gate(
+    coverage: dict,
+    sampling_strategy: Optional[str] = None,
+) -> dict:
+    """
+    Force review_needed when cache was built with capped head sampling.
+
+    full (or missing/unknown legacy metadata) leaves host/member/date/span
+    gates unchanged. head_per_member and global_head always fail the gate
+    even if host/member/date/span minima are met.
+    """
+    out = dict(coverage)
+    failed = list(out.get("failed_conditions") or [])
+    strategy = (sampling_strategy or "full").strip() or "full"
+    out["sampling_strategy"] = strategy
+    if strategy in _CAPPED_SAMPLING_STRATEGIES:
+        msg = _CAPPED_SAMPLING_FAIL.format(strategy=strategy)
+        if msg not in failed:
+            failed.append(msg)
+        out["failed_conditions"] = failed
+        out["status"] = "review_needed"
+    else:
+        out["failed_conditions"] = failed
+        out["status"] = "ok" if not failed else "review_needed"
+    return out
+
+
 def assess_coverage_from_df(df, n_events: int, n_parseable: int) -> dict:
     """Coverage metrics from an in-memory event DataFrame."""
     import pandas as pd
@@ -1017,7 +1051,10 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
     print(f"[INFO] Cache events: {n_total:,}; parseable timestamps: {n_parseable:,}")
 
     coverage = assess_coverage_from_cache(con, n_total, n_parseable)
-    print(f"[INFO] Coverage gate: {coverage['status']}")
+    sampling_strategy = cache_meta.get("sampling_strategy") or "full"
+    coverage = apply_sampling_strategy_gate(coverage, sampling_strategy)
+    print(f"[INFO] Coverage gate: {coverage['status']} "
+          f"(sampling_strategy={sampling_strategy})")
     for cond in coverage.get("failed_conditions") or []:
         print(f"  - failed: {cond}")
 
@@ -1070,6 +1107,8 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
         f"Timestamp rule   : {ts_rule}",
         f"Primary window   : {primary_ws_final}",
         f"Backup window    : {backup_ws_final}",
+        f"sampling_strategy: {sampling_strategy}",
+        f"sampling_limitation: {cache_meta.get('sampling_limitation', 'n/a')}",
         "",
     ]
     lines += format_coverage_block(coverage)
