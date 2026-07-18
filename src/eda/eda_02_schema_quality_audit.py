@@ -194,6 +194,15 @@ def _decide_reliability(
     """
     Keep / review / drop decision for one field.
 
+    Decision semantics:
+      keep   — suitable for the default downstream/core modeling feature set
+               (or retained by design as diagnostic/discovery).
+      review — needs analyst confirmation before default modeling use.
+      drop   — exclude from the default downstream/core modeling feature set
+               because of insufficient coverage or no discriminative value.
+               This does NOT delete the column from the normalized schema;
+               evidence-bearing sparse columns remain preserved.
+
     Object-specific fields use applicable-row missingness.  Absent applicable
     object types → review / not assessable (never drop).  Decisions from
     capped or single-host samples are preliminary.
@@ -204,6 +213,31 @@ def _decide_reliability(
         return "keep", (
             f"diagnostic/provenance/control field retained by design "
             f"(overall missing {missing_pct_overall}%){preliminary}"
+        )
+
+    # Discovery fields are schema monitors — never score via ordinary
+    # missingness drop thresholds (empty unmapped keys is a success signal).
+    if role == "discovery" or field == "unmapped_property_keys_raw":
+        if field == "unmapped_property_keys_raw":
+            if unique_count == 0:
+                return "keep", (
+                    "no unmapped property keys observed; "
+                    "retained as a schema-drift monitor "
+                    "(empty is expected when all properties are mapped)"
+                    f"{preliminary}"
+                )
+            return "review", (
+                "schema drift/unmapped keys detected "
+                f"({unique_count} distinct non-empty unmapped_property_keys_raw "
+                "value(s)); review newly observed property keys before promoting"
+                f"{preliminary}"
+            )
+        # Other discovery columns (e.g. properties_keys_raw): retain; never drop
+        # solely because of missingness/constancy heuristics.
+        return "keep", (
+            f"discovery field retained as schema monitor "
+            f"({unique_count} unique non-empty value(s); "
+            f"overall missing {missing_pct_overall}%){preliminary}"
         )
 
     if role == "object_specific" and applicable_object_types_for(field):
@@ -227,7 +261,8 @@ def _decide_reliability(
 
     if decision_pct > _REVIEW_THRESH:
         return "drop", (
-            f"{decision_pct}% missing ({pct_label}); exceeds drop threshold"
+            f"{decision_pct}% missing ({pct_label}); exclude from default "
+            f"modeling feature set (column remains in normalized schema)"
             f"{preliminary}"
         )
 
@@ -238,14 +273,9 @@ def _decide_reliability(
         else total_rows
     )
     if unique_count <= 1 and constancy_n > 10 and field != "host_raw":
-        if role == "discovery":
-            return "keep", (
-                f"discovery field retained; {unique_count} unique non-empty value(s)"
-                f"{preliminary}"
-            )
         return "drop", (
-            f"constant or near-constant field; no discriminative value"
-            f"{preliminary}"
+            f"constant or near-constant field; exclude from default modeling "
+            f"feature set (column remains in normalized schema){preliminary}"
         )
 
     if field == "timestamp_parsed" and missing_pct_overall > 50.0:
@@ -735,12 +765,19 @@ def write_readme(
         "  Audits every column in SLIM_EVENT_COLUMNS with field_role:",
         "    provenance | control | core | entity | object_specific | discovery",
         "  keep   : < 20% missing (overall, or applicable for object-specific)",
+        "           OR retained by design (provenance/control/discovery monitors)",
         "  review : 20–80% missing OR not assessable (applicable object absent)",
-        "  drop   : > 80% missing OR constant/no-information (non-host) field",
+        "           OR unmapped_property_keys_raw shows schema drift",
+        "  drop   : exclude from the DEFAULT modeling feature set due to",
+        "           >80% missing or constant/no-information (non-host) field.",
+        "           drop does NOT delete the column from the normalized schema;",
+        "           evidence-bearing sparse columns remain preserved.",
         "  Object-specific fields use missing_percent_applicable, not overall.",
         "  If applicable object types are absent → review / not assessable (never drop).",
         "  host_raw is never dropped merely because a single-host sample is constant.",
         "  Diagnostic/provenance fields (e.g. parse_error) are retained even when empty.",
+        "  unmapped_property_keys_raw: empty → keep (schema-drift monitor);",
+        "    non-empty → review (unmapped keys / schema drift detected).",
         "  Decisions from capped or single-host samples are PRELIMINARY.",
         "",
         "T4 severity levels",
@@ -1203,6 +1240,9 @@ def run_eda02_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
         "  applicable object rows. Absent applicable types → review/not assessable.",
         "  host_raw is not dropped for single-host constancy. Diagnostic fields",
         "  (parse_error, etc.) are retained when empty by design.",
+        "  unmapped_property_keys_raw: empty → keep (drift monitor);",
+        "  non-empty → review (schema drift). 'drop' excludes from the default",
+        "  modeling feature set only — columns remain in the normalized schema.",
         "  Decisions from capped/single-host samples are PRELIMINARY.",
     ]
     (out_dir / "README_eda02_schema_quality.txt").write_text("\n".join(lines), encoding="utf-8")

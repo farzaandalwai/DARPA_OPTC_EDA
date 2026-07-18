@@ -113,6 +113,60 @@ def test_empty_diagnostic_fields_retained():
     assert field_role("source_type") == "control"
 
 
+def test_empty_unmapped_discovery_field_kept_as_drift_monitor():
+    events = [
+        _base_event(
+            raw_event_id=f"e{i}",
+            unmapped_property_keys_raw="",
+            properties_keys_raw="image_path,command_line",
+        )
+        for i in range(15)
+    ]
+    rows = compute_t3(events, ["endpoint"])
+    by_field = {r["field_name"]: r for r in rows}
+    um = by_field["unmapped_property_keys_raw"]
+    assert um["field_role"] == "discovery"
+    assert um["missing_percent_overall"] == 100.0
+    assert um["unique_count"] == 0
+    assert um["reliability_decision_keep_review_drop"] == "keep"
+    assert "schema-drift monitor" in um["reason"]
+    assert "no unmapped property keys observed" in um["reason"]
+    # Sparse promoted fields still appear in the audited schema surface.
+    assert "property_size_raw" in by_field
+    assert "flow_start_time_raw" in by_field
+
+
+def test_nonempty_unmapped_discovery_field_review_for_schema_drift():
+    events = [
+        _base_event(
+            raw_event_id=f"e{i}",
+            unmapped_property_keys_raw="mystery_flag" if i % 2 == 0 else "other_new_key",
+        )
+        for i in range(12)
+    ]
+    rows = compute_t3(events, ["endpoint"])
+    um = next(r for r in rows if r["field_name"] == "unmapped_property_keys_raw")
+    assert um["field_role"] == "discovery"
+    assert um["unique_count"] >= 1
+    assert um["reliability_decision_keep_review_drop"] == "review"
+    assert "schema drift" in um["reason"].lower() or "unmapped keys" in um["reason"]
+
+
+def test_ordinary_non_discovery_still_uses_missingness_thresholds():
+    # A non-discovery entity field that is almost always empty → drop.
+    events = [
+        _base_event(raw_event_id=f"e{i}", principal_raw="")
+        for i in range(20)
+    ]
+    rows = compute_t3(events, ["endpoint"])
+    pr = next(r for r in rows if r["field_name"] == "principal_raw")
+    assert pr["field_role"] == "entity"
+    assert pr["missing_percent_overall"] == 100.0
+    assert pr["reliability_decision_keep_review_drop"] == "drop"
+    assert "default modeling feature set" in pr["reason"]
+    assert "normalized schema" in pr["reason"]
+
+
 def test_derived_parent_process_not_dropped_on_non_process_absence():
     """
     Mirror real-cache pattern: parent_process_raw high overall missingness
