@@ -32,6 +32,7 @@ import collections
 import datetime
 import json
 import pathlib
+import re
 import shutil
 import sys
 from typing import Optional
@@ -39,6 +40,7 @@ from typing import Optional
 # ── Local import ──────────────────────────────────────────────────────────
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from optc_streaming_parser import (  # type: ignore
+    SCHEMA_VERSION,
     SLIM_EVENT_COLUMNS,
     stream_from_archives,
 )
@@ -154,7 +156,37 @@ T3_COLUMNS = [
     "example_value",
     "reliability_decision_keep_review_drop",
     "reason",
+    "unique_count_method",
+    "top_3_values_method",
 ]
+
+# Identifier / provenance / path-like fields: skip full-domain top-value ranking.
+_SKIP_TOP_K_FIELDS = _PROVENANCE_FIELDS | {
+    "timestamp_raw", "timestamp_parsed",
+    "actor_id_raw", "object_id_raw", "pid_raw", "ppid_raw", "tid_raw",
+    "object_value_raw",
+    "command_line_raw", "image_path_raw", "file_path_raw", "module_path_raw",
+    "parent_image_path_raw", "process_raw", "parent_process_raw",
+    "generic_path_raw", "shell_payload_raw", "shell_context_raw",
+    "registry_key_raw", "registry_value_raw", "registry_data_raw",
+    "task_name_raw", "task_pid_raw", "task_process_uuid_raw",
+    "thread_src_pid_raw", "thread_src_tid_raw",
+    "thread_tgt_pid_raw", "thread_tgt_tid_raw", "thread_tgt_pid_uuid_raw",
+    "base_address_raw", "stack_base_raw", "stack_limit_raw", "start_address_raw",
+    "user_stack_base_raw", "user_stack_limit_raw", "subprocess_tag_raw",
+    "flow_start_time_raw", "flow_end_time_raw", "new_path_raw",
+    "process_sid_raw", "logon_id_raw", "requesting_logon_id_raw",
+    "property_size_raw",
+}
+
+
+def _field_uses_approx_top_k(field: str) -> bool:
+    """Categorical / low-cardinality fields may use bounded APPROX_TOP_K."""
+    return field not in _SKIP_TOP_K_FIELDS
+
+
+def _sql_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
 
 
 def field_role(field: str) -> str:
@@ -190,6 +222,7 @@ def _decide_reliability(
     missing_pct_applicable: float,
     unique_count: int,
     n_hosts: int,
+    unique_count_method: str = "exact_count_distinct",
 ) -> tuple[str, str]:
     """
     Keep / review / drop decision for one field.
@@ -206,8 +239,18 @@ def _decide_reliability(
     Object-specific fields use applicable-row missingness.  Absent applicable
     object types → review / not assessable (never drop).  Decisions from
     capped or single-host samples are preliminary.
+
+    unique_count_method controls how unique_count is described in reasons:
+    exact_empty / exact_constant / exact_count_distinct use exact wording;
+    approx_count_distinct must not claim an exact distinct count.
     """
     preliminary = " [preliminary: capped/single-host sample]" if n_hosts <= 1 else ""
+    approx = unique_count_method == "approx_count_distinct"
+
+    def _uniq_phrase(noun: str = "unique values") -> str:
+        if approx:
+            return f"approximately {unique_count} {noun}"
+        return f"{unique_count} {noun}"
 
     if field in _ALWAYS_KEEP_FIELDS or role in ("provenance", "control"):
         return "keep", (
@@ -226,17 +269,26 @@ def _decide_reliability(
                     "(empty is expected when all properties are mapped)"
                     f"{preliminary}"
                 )
+            if approx:
+                drift_count = (
+                    f"(approximately {unique_count} distinct non-empty "
+                    "unmapped_property_keys_raw value(s))"
+                )
+            else:
+                drift_count = (
+                    f"({unique_count} distinct non-empty "
+                    "unmapped_property_keys_raw value(s))"
+                )
             return "review", (
                 "schema drift/unmapped keys detected "
-                f"({unique_count} distinct non-empty unmapped_property_keys_raw "
-                "value(s)); review newly observed property keys before promoting"
+                f"{drift_count}; review newly observed property keys before promoting"
                 f"{preliminary}"
             )
         # Other discovery columns (e.g. properties_keys_raw): retain; never drop
         # solely because of missingness/constancy heuristics.
         return "keep", (
             f"discovery field retained as schema monitor "
-            f"({unique_count} unique non-empty value(s); "
+            f"({_uniq_phrase('unique non-empty value(s)')}; "
             f"overall missing {missing_pct_overall}%){preliminary}"
         )
 
@@ -291,7 +343,7 @@ def _decide_reliability(
         )
 
     return "keep", (
-        f"{decision_pct}% missing ({pct_label}); {unique_count} unique values"
+        f"{decision_pct}% missing ({pct_label}); {_uniq_phrase()}"
         f"{preliminary}"
     )
 
@@ -463,6 +515,13 @@ def compute_t3(events: list, source_types: list) -> list:
             else:
                 parsed_data_type = "str"
 
+            if unique_count == 0:
+                unique_count_method = "exact_empty"
+            elif unique_count == 1:
+                unique_count_method = "exact_constant"
+            else:
+                unique_count_method = "exact_count_distinct"
+
             decision, reason = _decide_reliability(
                 field,
                 role=role,
@@ -472,6 +531,7 @@ def compute_t3(events: list, source_types: list) -> list:
                 missing_pct_applicable=missing_pct_applicable,
                 unique_count=unique_count,
                 n_hosts=n_hosts,
+                unique_count_method=unique_count_method,
             )
 
             rows.append({
@@ -491,6 +551,8 @@ def compute_t3(events: list, source_types: list) -> list:
                 "example_value": _safe_str(example, 120),
                 "reliability_decision_keep_review_drop": decision,
                 "reason": reason,
+                "unique_count_method": unique_count_method,
+                "top_3_values_method": "exact_bounded_candidates",
             })
 
     return rows
@@ -827,10 +889,42 @@ def parse_args() -> argparse.Namespace:
                    help="Pilot manifest CSV (required with --normalized-cache-dir)")
     p.add_argument("--normalized-cache-dir", default=None,
                    help="Parquet cache dir from build_normalized_pilot_cache.py")
+    p.add_argument(
+        "--duckdb-memory-limit",
+        default="4GB",
+        help=(
+            "DuckDB buffer-manager memory_limit for cache mode (default: 4GB). "
+            "This is not an absolute process-RAM ceiling."
+        ),
+    )
+    p.add_argument(
+        "--duckdb-temp-dir",
+        default=None,
+        help=(
+            "Local DuckDB temp/spill directory for cache mode. "
+            "Default: a local tempfile under the system temp dir (never Drive)."
+        ),
+    )
+    p.add_argument(
+        "--duckdb-threads",
+        type=int,
+        default=2,
+        help="DuckDB threads for cache mode (default: 2; must be >= 1).",
+    )
     return p.parse_args()
 
 
 # ── Cache-mode helpers (DuckDB; never load full cache into RAM) ────────────
+
+_DUCKDB_MEMORY_LIMIT_RE = re.compile(
+    r"^\d+(\.\d+)?\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)$",
+    re.IGNORECASE,
+)
+
+
+class CacheAuditError(Exception):
+    """Fatal cache-mode validation / integrity failure."""
+
 
 def _load_cache_metadata(cache_dir: pathlib.Path) -> dict:
     meta_path = cache_dir / "cache_metadata.json"
@@ -839,57 +933,331 @@ def _load_cache_metadata(cache_dir: pathlib.Path) -> dict:
     return {}
 
 
-def _duck_conn(cache_dir: pathlib.Path):
+def _sql_string_literal(value: str) -> str:
+    """Escape a value for use as a DuckDB SQL string literal."""
+    if "\x00" in value:
+        raise CacheAuditError("DuckDB config value must not contain NUL bytes")
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _validate_duckdb_threads(threads: int) -> int:
+    try:
+        n = int(threads)
+    except (TypeError, ValueError) as exc:
+        raise CacheAuditError(
+            f"Invalid --duckdb-threads={threads!r}; must be an integer >= 1"
+        ) from exc
+    if n < 1:
+        raise CacheAuditError(
+            f"Invalid --duckdb-threads={threads}; must be >= 1"
+        )
+    return n
+
+
+def _validate_duckdb_memory_limit(memory_limit: str) -> str:
+    if memory_limit is None:
+        raise CacheAuditError("--duckdb-memory-limit is required")
+    s = str(memory_limit).strip()
+    if not s or not _DUCKDB_MEMORY_LIMIT_RE.match(s):
+        raise CacheAuditError(
+            f"Invalid --duckdb-memory-limit={memory_limit!r}; "
+            "expected a size like '4GB', '512MB', or '1.5GiB'"
+        )
+    if any(c in s for c in ";\n\r\\"):
+        raise CacheAuditError(
+            f"Invalid --duckdb-memory-limit={memory_limit!r}; "
+            "disallowed characters"
+        )
+    return s
+
+
+def _validate_duckdb_temp_dir(temp_dir: str) -> pathlib.Path:
+    if temp_dir is None or str(temp_dir).strip() == "":
+        raise CacheAuditError("DuckDB temp dir path must be non-empty")
+    s = str(temp_dir)
+    if "\x00" in s:
+        raise CacheAuditError("--duckdb-temp-dir must not contain NUL bytes")
+    if any(c in s for c in ";\n\r"):
+        raise CacheAuditError(
+            f"Invalid --duckdb-temp-dir={temp_dir!r}; disallowed characters"
+        )
+    return pathlib.Path(s)
+
+
+def _configure_duckdb(
+    con,
+    *,
+    memory_limit: str,
+    temp_dir: str,
+    threads: int,
+) -> None:
+    """Apply conservative cache-mode DuckDB settings (buffer limit + local spill)."""
+    mem = _validate_duckdb_memory_limit(memory_limit)
+    spill = _validate_duckdb_temp_dir(temp_dir)
+    n_threads = _validate_duckdb_threads(threads)
+    con.execute(f"SET memory_limit={_sql_string_literal(mem)}")
+    con.execute(f"SET temp_directory={_sql_string_literal(str(spill))}")
+    con.execute(f"SET threads={n_threads}")
+    con.execute("SET preserve_insertion_order=false")
+
+
+def _duck_conn(
+    cache_dir: pathlib.Path,
+    *,
+    memory_limit: str = "4GB",
+    temp_dir: Optional[str] = None,
+    threads: int = 2,
+):
+    """
+    Open a DuckDB connection over the cache glob with conservative settings.
+
+    Returns (connection, spill_temp_dir, spill_owned).
+    spill_owned is True only when this function created the directory via
+    tempfile.mkdtemp(); callers must delete owned spill dirs after close.
+    Explicit --duckdb-temp-dir paths are never auto-deleted.
+    """
     import duckdb
-    con = duckdb.connect()
-    glob = str(cache_dir / "*.parquet")
-    con.execute(f"CREATE VIEW events AS SELECT * FROM read_parquet('{glob}')")
-    return con
+    import tempfile
+
+    # Validate before creating any resources.
+    mem = _validate_duckdb_memory_limit(memory_limit)
+    n_threads = _validate_duckdb_threads(threads)
+    cache_dir = pathlib.Path(cache_dir)
+
+    spill: Optional[pathlib.Path] = None
+    spill_owned = False
+    con = None
+    try:
+        if temp_dir is not None:
+            spill = _validate_duckdb_temp_dir(temp_dir)
+            spill.mkdir(parents=True, exist_ok=True)
+            spill_owned = False
+        else:
+            spill = pathlib.Path(tempfile.mkdtemp(prefix="eda02_duckdb_tmp_"))
+            spill_owned = True
+
+        con = duckdb.connect()
+        _configure_duckdb(
+            con,
+            memory_limit=mem,
+            temp_dir=str(spill),
+            threads=n_threads,
+        )
+        glob = str(cache_dir / "*.parquet")
+        # Path may contain quotes; escape for the read_parquet string literal.
+        con.execute(
+            f"CREATE VIEW events AS SELECT * FROM read_parquet("
+            f"{_sql_string_literal(glob)})"
+        )
+        return con, str(spill), spill_owned
+    except Exception:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        if spill_owned and spill is not None:
+            shutil.rmtree(spill, ignore_errors=True)
+        raise
+
+
+def _t3_represented_total_rows(t3_rows: list) -> int:
+    """Sum total_rows across distinct source_type groups represented in T3."""
+    by_src: dict = {}
+    for row in t3_rows:
+        src = row["source_type"]
+        by_src[src] = int(row["total_rows"])
+    return int(sum(by_src.values()))
+
+
+def assert_t3_matches_cache_metadata(t3_rows: list, cache_meta: dict) -> int:
+    """
+    Require T3 source_type aggregate totals to equal metadata total_events_written
+    when that metadata field is present.
+    """
+    represented = _t3_represented_total_rows(t3_rows)
+    meta_total = cache_meta.get("total_events_written")
+    if meta_total is None:
+        return represented
+    expected = int(meta_total)
+    if represented != expected:
+        raise CacheAuditError(
+            f"T3 full-scan integrity check failed: source_type aggregates "
+            f"represent {represented:,} rows but cache_metadata.json "
+            f"total_events_written={expected:,}"
+        )
+    return represented
+
+
+def _format_approx_top_k(raw) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, list):
+        parts = []
+        for item in raw[:3]:
+            if isinstance(item, dict):
+                key = item.get("key", item.get("value", item))
+                cnt = item.get("count")
+                if cnt is not None:
+                    parts.append(f"{_safe_str(key, 80)}(~{cnt})")
+                else:
+                    parts.append(f"{_safe_str(key, 80)}(~approx)")
+            else:
+                parts.append(f"{_safe_str(item, 80)}(~approx)")
+        return "; ".join(parts)[:300]
+    return _safe_str(raw, 300)
+
+
+def _build_t3_primary_aggregate_sql(present: set) -> str:
+    """
+    One GROUP BY source_type scan: exact missing/applicability/MIN/MAX plus
+    bounded descriptive approx uniqueness / optional APPROX_TOP_K.
+    """
+    select_parts = [
+        'CAST("source_type" AS VARCHAR) AS source_type',
+        "COUNT(*)::BIGINT AS total_rows",
+    ]
+    for field in _AUDIT_FIELDS:
+        if field not in present:
+            continue
+        f = _sql_ident(field)
+        nonempty = f"({f} IS NOT NULL AND CAST({f} AS VARCHAR) != '')"
+        missing = f"({f} IS NULL OR CAST({f} AS VARCHAR) = '')"
+        select_parts.append(
+            f"COUNT(*) FILTER (WHERE {missing})::BIGINT AS {_sql_ident('miss__' + field)}"
+        )
+        select_parts.append(
+            f"COUNT(*) FILTER (WHERE {nonempty})::BIGINT AS {_sql_ident('nonempty__' + field)}"
+        )
+        select_parts.append(
+            f"MIN(CASE WHEN {nonempty} THEN CAST({f} AS VARCHAR) END) "
+            f"AS {_sql_ident('min__' + field)}"
+        )
+        select_parts.append(
+            f"MAX(CASE WHEN {nonempty} THEN CAST({f} AS VARCHAR) END) "
+            f"AS {_sql_ident('max__' + field)}"
+        )
+        select_parts.append(
+            f"approx_count_distinct(CASE WHEN {nonempty} THEN CAST({f} AS VARCHAR) END)"
+            f"::BIGINT AS {_sql_ident('approx_u__' + field)}"
+        )
+        select_parts.append(
+            f"ANY_VALUE(CASE WHEN {nonempty} THEN CAST({f} AS VARCHAR) END) "
+            f"AS {_sql_ident('example__' + field)}"
+        )
+        appl_types = applicable_object_types_for(field)
+        if appl_types:
+            type_list = ", ".join(f"'{t}'" for t in appl_types)
+            appl_pred = (
+                f'UPPER(TRIM(CAST("object_raw" AS VARCHAR))) IN ({type_list})'
+            )
+            select_parts.append(
+                f"COUNT(*) FILTER (WHERE {appl_pred})::BIGINT "
+                f"AS {_sql_ident('appl__' + field)}"
+            )
+            select_parts.append(
+                f"COUNT(*) FILTER (WHERE {appl_pred} AND {missing})::BIGINT "
+                f"AS {_sql_ident('miss_appl__' + field)}"
+            )
+        if _field_uses_approx_top_k(field):
+            select_parts.append(
+                f"approx_top_k(CASE WHEN {nonempty} THEN CAST({f} AS VARCHAR) END, 3) "
+                f"AS {_sql_ident('topk__' + field)}"
+            )
+    body = ",\n  ".join(select_parts)
+    return (
+        f"SELECT\n  {body}\n"
+        f'FROM events\nGROUP BY CAST("source_type" AS VARCHAR)\n'
+        f"ORDER BY 1"
+    )
 
 
 def compute_t3_from_cache(con) -> list:
-    """T3 via DuckDB aggregates over every SLIM_EVENT_COLUMNS field."""
-    # Discover which slim columns are present in the parquet schema.
-    present = {r[0] for r in con.execute("DESCRIBE SELECT * FROM events").fetchall()}
-    n_hosts = con.execute(
-        """
-        SELECT COUNT(DISTINCT NULLIF(CAST(host_raw AS VARCHAR), ''))
-        FROM events
-        """
-    ).fetchone()[0] if "host_raw" in present else 0
+    """
+    Memory-bounded T3 over the full Parquet cache.
 
-    srcs = [r[0] for r in con.execute(
-        "SELECT DISTINCT source_type FROM events ORDER BY 1"
-    ).fetchall()]
-    rows = []
-    for src in srcs:
-        total = con.execute(
-            "SELECT COUNT(*) FROM events WHERE source_type = ?", [src]
-        ).fetchone()[0]
+    Exactly one primary payload scan: GROUP BY source_type with aggregate
+    expressions only (no per-field full-domain GROUP BY / exact COUNT DISTINCT
+    over arbitrary columns). Empty/constant detection is exact via nonempty
+    counts + MIN/MAX; nonconstant descriptive cardinality uses
+    APPROX_COUNT_DISTINCT; high-cardinality top values are skipped.
+    """
+    print(
+        "[T3] Describing cache schema (column presence) ...",
+        flush=True,
+    )
+    present = {r[0] for r in con.execute("DESCRIBE SELECT * FROM events").fetchall()}
+    print(
+        f"[T3] Schema describe complete: {len(present)} columns present.",
+        flush=True,
+    )
+
+    sql = _build_t3_primary_aggregate_sql(present)
+    print(
+        "[T3] Starting primary bounded aggregate scan "
+        "(GROUP BY source_type; exact missing/applicability/MIN/MAX; "
+        "approx uniqueness; selective APPROX_TOP_K) ...",
+        flush=True,
+    )
+    agg_rows = con.execute(sql).fetchall()
+    colnames = [d[0] for d in con.description]
+    print(
+        f"[T3] Primary aggregate scan complete: {len(agg_rows)} source_type group(s).",
+        flush=True,
+    )
+
+    # Exact host cardinality class for preliminary labeling (0 / 1 / >1),
+    # derived from the same primary aggregates — no extra full scan.
+    host_vals: set = set()
+    host_nonconstant = False
+    for tup in agg_rows:
+        row = dict(zip(colnames, tup))
+        nonempty = int(row.get("nonempty__host_raw") or 0)
+        if nonempty <= 0:
+            continue
+        mn = row.get("min__host_raw")
+        mx = row.get("max__host_raw")
+        if mn is None or mx is None:
+            continue
+        if str(mn) != str(mx):
+            host_nonconstant = True
+        host_vals.add(str(mn))
+        host_vals.add(str(mx))
+    if host_nonconstant or len(host_vals) > 1:
+        n_hosts = 2
+    else:
+        n_hosts = len(host_vals)
+
+    rows: list = []
+    for tup in agg_rows:
+        prow = dict(zip(colnames, tup))
+        src = prow["source_type"]
+        total = int(prow["total_rows"] or 0)
         if total == 0:
             continue
+
         for field in _AUDIT_FIELDS:
             role = field_role(field)
             appl_types = applicable_object_types_for(field)
             appl_types_str = ",".join(appl_types) if appl_types else "ALL"
 
             if field not in present:
-                # Column absent from cache parquet — still emit a T3 row.
                 decision, reason = _decide_reliability(
                     field,
                     role=role,
-                    total_rows=int(total),
-                    applicable_rows=0 if appl_types else int(total),
+                    total_rows=total,
+                    applicable_rows=0 if appl_types else total,
                     missing_pct_overall=100.0,
                     missing_pct_applicable=100.0,
                     unique_count=0,
-                    n_hosts=int(n_hosts or 0),
+                    n_hosts=n_hosts,
+                    unique_count_method="exact_empty",
                 )
                 if appl_types:
                     decision, reason = "review", (
                         "not assessable: column absent from cache parquet"
                         " [preliminary: capped/single-host sample]"
-                        if int(n_hosts or 0) <= 1 else
+                        if n_hosts <= 1 else
                         "not assessable: column absent from cache parquet"
                     )
                 rows.append({
@@ -898,9 +1266,9 @@ def compute_t3_from_cache(con) -> list:
                     "field_role": role,
                     "raw_data_type": "unknown",
                     "parsed_data_type": "str",
-                    "total_rows": int(total),
+                    "total_rows": total,
                     "applicable_object_types": appl_types_str,
-                    "applicable_rows": 0 if appl_types else int(total),
+                    "applicable_rows": 0 if appl_types else total,
                     "missing_percent": 100.0,
                     "missing_percent_overall": 100.0,
                     "missing_percent_applicable": 100.0,
@@ -909,39 +1277,19 @@ def compute_t3_from_cache(con) -> list:
                     "example_value": "",
                     "reliability_decision_keep_review_drop": decision,
                     "reason": reason,
+                    "unique_count_method": "exact_empty",
+                    "top_3_values_method": "skipped_high_cardinality",
                 })
                 continue
 
-            miss = con.execute(
-                f"""
-                SELECT COUNT(*) FROM events
-                WHERE source_type = ?
-                  AND ({field} IS NULL OR CAST({field} AS VARCHAR) = '')
-                """,
-                [src],
-            ).fetchone()[0]
+            miss = int(prow.get(f"miss__{field}") or 0)
+            nonempty = int(prow.get(f"nonempty__{field}") or 0)
             missing_pct_overall = round(miss / max(total, 1) * 100, 1)
 
             if appl_types:
-                type_list = ", ".join(f"'{t}'" for t in appl_types)
-                applicable_rows = con.execute(
-                    f"""
-                    SELECT COUNT(*) FROM events
-                    WHERE source_type = ?
-                      AND UPPER(TRIM(CAST(object_raw AS VARCHAR))) IN ({type_list})
-                    """,
-                    [src],
-                ).fetchone()[0]
+                applicable_rows = int(prow.get(f"appl__{field}") or 0)
                 if applicable_rows > 0:
-                    miss_app = con.execute(
-                        f"""
-                        SELECT COUNT(*) FROM events
-                        WHERE source_type = ?
-                          AND UPPER(TRIM(CAST(object_raw AS VARCHAR))) IN ({type_list})
-                          AND ({field} IS NULL OR CAST({field} AS VARCHAR) = '')
-                        """,
-                        [src],
-                    ).fetchone()[0]
+                    miss_app = int(prow.get(f"miss_appl__{field}") or 0)
                     missing_pct_applicable = round(
                         miss_app / applicable_rows * 100, 1
                     )
@@ -951,30 +1299,35 @@ def compute_t3_from_cache(con) -> list:
                 applicable_rows = total
                 missing_pct_applicable = missing_pct_overall
 
-            unique_count = con.execute(
-                f"""
-                SELECT COUNT(DISTINCT {field}) FROM events
-                WHERE source_type = ?
-                  AND {field} IS NOT NULL AND CAST({field} AS VARCHAR) != ''
-                """,
-                [src],
-            ).fetchone()[0]
-            top = con.execute(
-                f"""
-                SELECT CAST({field} AS VARCHAR) AS v, COUNT(*) AS c
-                FROM events
-                WHERE source_type = ?
-                  AND {field} IS NOT NULL AND CAST({field} AS VARCHAR) != ''
-                GROUP BY 1 ORDER BY c DESC LIMIT 3
-                """,
-                [src],
-            ).fetchall()
-            top3 = "; ".join(f"{v}({c})" for v, c in top)
-            example = top[0][0] if top else ""
+            mn = prow.get(f"min__{field}")
+            mx = prow.get(f"max__{field}")
+            approx_u = int(prow.get(f"approx_u__{field}") or 0)
+            example = prow.get(f"example__{field}") or ""
+
+            # Exact empty / constant / nonconstant via nonempty + MIN/MAX.
+            if nonempty == 0:
+                unique_count = 0
+                unique_count_method = "exact_empty"
+                decision_unique = 0
+            elif mn is not None and mx is not None and str(mn) == str(mx):
+                unique_count = 1
+                unique_count_method = "exact_constant"
+                decision_unique = 1
+            else:
+                unique_count_method = "approx_count_distinct"
+                unique_count = max(2, approx_u)
+                decision_unique = unique_count
+
+            if _field_uses_approx_top_k(field):
+                top3 = _format_approx_top_k(prow.get(f"topk__{field}"))
+                top_method = "approx_top_k"
+            else:
+                top3 = ""
+                top_method = "skipped_high_cardinality"
 
             if field == "timestamp_parsed":
                 parsed_data_type = (
-                    "datetime_str_iso" if unique_count > 1 else "unparseable"
+                    "datetime_str_iso" if decision_unique > 1 else "unparseable"
                 )
                 raw_data_type = "str"
             elif field == "timestamp_raw":
@@ -987,12 +1340,13 @@ def compute_t3_from_cache(con) -> list:
             decision, reason = _decide_reliability(
                 field,
                 role=role,
-                total_rows=int(total),
+                total_rows=total,
                 applicable_rows=int(applicable_rows),
                 missing_pct_overall=missing_pct_overall,
                 missing_pct_applicable=missing_pct_applicable,
-                unique_count=int(unique_count),
-                n_hosts=int(n_hosts or 0),
+                unique_count=int(decision_unique),
+                n_hosts=int(n_hosts),
+                unique_count_method=unique_count_method,
             )
 
             rows.append({
@@ -1001,7 +1355,7 @@ def compute_t3_from_cache(con) -> list:
                 "field_role": role,
                 "raw_data_type": raw_data_type,
                 "parsed_data_type": parsed_data_type,
-                "total_rows": int(total),
+                "total_rows": total,
                 "applicable_object_types": appl_types_str,
                 "applicable_rows": int(applicable_rows),
                 "missing_percent": missing_pct_overall,
@@ -1012,7 +1366,15 @@ def compute_t3_from_cache(con) -> list:
                 "example_value": _safe_str(example, 120),
                 "reliability_decision_keep_review_drop": decision,
                 "reason": reason,
+                "unique_count_method": unique_count_method,
+                "top_3_values_method": top_method,
             })
+
+    print(
+        f"[T3] Materialized {len(rows)} field-reliability rows "
+        f"(no additional full-cache scan).",
+        flush=True,
+    )
     return rows
 
 
@@ -1154,6 +1516,15 @@ def run_eda02_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
         )
         sys.exit(1)
 
+    try:
+        _validate_duckdb_threads(args.duckdb_threads)
+        _validate_duckdb_memory_limit(args.duckdb_memory_limit)
+        if args.duckdb_temp_dir is not None:
+            _validate_duckdb_temp_dir(args.duckdb_temp_dir)
+    except CacheAuditError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        sys.exit(1)
+
     manifest_meta = {}
     if args.manifest_csv:
         mi = load_manifest(pathlib.Path(args.manifest_csv))
@@ -1167,7 +1538,8 @@ def run_eda02_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
     cache_meta = _load_cache_metadata(cache_dir)
     pilot_label = (
         f"[CACHE MODE: manifest={manifest_meta.get('manifest_version', 'unknown')}; "
-        f"events={cache_meta.get('total_events_written', '?')}]"
+        f"events={cache_meta.get('total_events_written', '?')}; "
+        f"schema={SCHEMA_VERSION}]"
     )
 
     print(f"\n{'='*60}")
@@ -1175,86 +1547,181 @@ def run_eda02_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
     print(f"  cache-dir     : {cache_dir}")
     print(f"  manifest-csv  : {args.manifest_csv}")
     print(f"  output-dir    : {out_dir}")
+    print(f"  schema        : {SCHEMA_VERSION}")
+    print(f"  duckdb-memory : {args.duckdb_memory_limit} (buffer-manager limit)")
+    print(f"  duckdb-threads: {args.duckdb_threads}")
+    print(f"  duckdb-temp   : {args.duckdb_temp_dir or '(local tempfile)'}")
     print(f"{'='*60}\n")
 
-    con = _duck_conn(cache_dir)
-    n_events = con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-    print(f"[INFO] Events in cache (DuckDB view): {n_events:,}")
+    con = None
+    duck_temp = None
+    spill_owned = False
+    try:
+        try:
+            con, duck_temp, spill_owned = _duck_conn(
+                cache_dir,
+                memory_limit=args.duckdb_memory_limit,
+                temp_dir=args.duckdb_temp_dir,
+                threads=args.duckdb_threads,
+            )
+        except CacheAuditError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as exc:
+            print(f"[ERROR] Failed to open DuckDB over cache: {exc}", file=sys.stderr)
+            sys.exit(1)
 
-    print("\nComputing T3 from cache ...")
-    t3_rows = compute_t3_from_cache(con)
-    t3_df = pd.DataFrame(t3_rows)
-    if not t3_df.empty:
-        t3_df = t3_df.reindex(columns=T3_COLUMNS)
-    else:
-        t3_df = pd.DataFrame(columns=T3_COLUMNS)
-    _save_csv(t3_df, out_dir / "T3_field_reliability_audit.csv",
-              tables_dir / "T3_field_reliability_audit.csv")
+        print(
+            f"[INFO] DuckDB configured: memory_limit={args.duckdb_memory_limit} "
+            f"(buffer-manager limit; not an absolute process-RAM ceiling), "
+            f"threads={args.duckdb_threads}, "
+            f"temp_directory={duck_temp}",
+            flush=True,
+        )
+        # Prefer cache metadata to avoid an extra full payload COUNT(*) scan.
+        n_events = cache_meta.get("total_events_written")
+        if n_events is None:
+            print("[INFO] Counting events in cache view ...", flush=True)
+            n_events = con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        n_events = int(n_events)
+        print(f"[INFO] Events in cache: {n_events:,}", flush=True)
 
-    print("\nComputing T4 from cache ...")
-    t4_rows = compute_t4_from_cache(con)
-    t4_df = pd.DataFrame(t4_rows) if t4_rows else pd.DataFrame(columns=[
-        "issue_id", "issue_type", "affected_file_or_source", "affected_field",
-        "number_of_rows_affected", "example_raw_event_id",
-        "severity_high_medium_low", "handling_decision",
-    ])
-    _save_csv(t4_df, out_dir / "T4_data_quality_issue_log.csv",
-              tables_dir / "T4_data_quality_issue_log.csv")
+        print("\nComputing T3 from cache ...", flush=True)
+        t3_rows = compute_t3_from_cache(con)
+        try:
+            represented = assert_t3_matches_cache_metadata(t3_rows, cache_meta)
+        except CacheAuditError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(
+            f"[T3] Integrity OK: source_type aggregates represent "
+            f"{represented:,} rows"
+            + (
+                f" (matches cache_metadata total_events_written)"
+                if cache_meta.get("total_events_written") is not None
+                else ""
+            ),
+            flush=True,
+        )
+        t3_df = pd.DataFrame(t3_rows)
+        if not t3_df.empty:
+            t3_df = t3_df.reindex(columns=T3_COLUMNS)
+        else:
+            t3_df = pd.DataFrame(columns=T3_COLUMNS)
+        _save_csv(t3_df, out_dir / "T3_field_reliability_audit.csv",
+                  tables_dir / "T3_field_reliability_audit.csv")
 
-    print("\nGenerating F2 from cache ...")
-    plot_f2_from_cache(con, out_dir, figures_dir, pilot_label)
+        print("\nComputing T4 from cache ...", flush=True)
+        print("[T4] Starting bounded issue-count aggregates ...", flush=True)
+        t4_rows = compute_t4_from_cache(con)
+        print(f"[T4] Complete: {len(t4_rows)} issue row(s).", flush=True)
+        t4_df = pd.DataFrame(t4_rows) if t4_rows else pd.DataFrame(columns=[
+            "issue_id", "issue_type", "affected_file_or_source", "affected_field",
+            "number_of_rows_affected", "example_raw_event_id",
+            "severity_high_medium_low", "handling_decision",
+        ])
+        _save_csv(t4_df, out_dir / "T4_data_quality_issue_log.csv",
+                  tables_dir / "T4_data_quality_issue_log.csv")
 
-    # README with cache/manifest metadata
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    lines = [
-        "EDA 2 — Schema and Data-Quality Audit (CACHE MODE)",
-        "=" * 50,
-        f"Generated (UTC): {now}",
-        f"Pilot label    : {pilot_label}",
-        "",
-        "Mode: normalized Parquet cache via DuckDB (not full in-memory event list).",
-        "No attack / benign / MITRE claims. No ground-truth overlays.",
-        "",
-        "Manifest",
-        "--------",
-        f"  path             : {manifest_meta.get('manifest_path', args.manifest_csv)}",
-        f"  version          : {manifest_meta.get('manifest_version', 'n/a')}",
-        f"  member count     : {manifest_meta.get('manifest_member_count', 'n/a')}",
-        f"  compressed GiB   : {manifest_meta.get('manifest_total_gib', 'n/a')}",
-        "",
-        "Cache metadata",
-        "--------------",
-        f"  cache-dir        : {cache_dir}",
-        f"  events written   : {cache_meta.get('total_events_written', n_events)}",
-        f"  chunks           : {cache_meta.get('chunks_written', 'n/a')}",
-        f"  max-events cap   : {cache_meta.get('max_events_safety_cap', 'n/a')}",
-        f"  include_raw_json : {cache_meta.get('include_raw_json', False)}",
-        f"  timestamp rule   : {cache_meta.get('timestamp_conversion_rule', 'n/a')}",
-        "",
-        f"T3 rows: {len(t3_rows)}   T4 issues: {len(t4_rows)}",
-        "",
-        "T3 notes (schema v2)",
-        "--------------------",
-        "  Audits every SLIM_EVENT_COLUMNS field with field_role and",
-        "  overall + applicable missingness. Object-specific decisions use",
-        "  applicable object rows. Absent applicable types → review/not assessable.",
-        "  host_raw is not dropped for single-host constancy. Diagnostic fields",
-        "  (parse_error, etc.) are retained when empty by design.",
-        "  unmapped_property_keys_raw: empty → keep (drift monitor);",
-        "  non-empty → review (schema drift). 'drop' excludes from the default",
-        "  modeling feature set only — columns remain in the normalized schema.",
-        "  Decisions from capped/single-host samples are PRELIMINARY.",
-    ]
-    (out_dir / "README_eda02_schema_quality.txt").write_text("\n".join(lines), encoding="utf-8")
-    print(f"  [README] {out_dir / 'README_eda02_schema_quality.txt'}")
-    con.close()
+        print("\nGenerating F2 from cache ...", flush=True)
+        print("[F2] Starting hourly timestamp coverage aggregate ...", flush=True)
+        plot_f2_from_cache(con, out_dir, figures_dir, pilot_label)
+        print("[F2] Complete.", flush=True)
 
-    print(f"\n{'='*60}")
-    print(f"EDA 2 COMPLETE  {pilot_label}")
-    print(f"  Events (cache) : {n_events:,}")
-    print(f"  T3 rows        : {len(t3_rows)}")
-    print(f"  T4 issues      : {len(t4_rows)}")
-    print(f"{'='*60}")
+        # README with cache/manifest metadata
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lines = [
+            "EDA 2 — Schema and Data-Quality Audit (CACHE MODE)",
+            "=" * 50,
+            f"Generated (UTC): {now}",
+            f"Pilot label    : {pilot_label}",
+            f"Schema version : {SCHEMA_VERSION}",
+            "",
+            "Mode: normalized Parquet cache via DuckDB (not full in-memory event list).",
+            "No attack / benign / MITRE claims. No ground-truth overlays.",
+            "",
+            "Manifest",
+            "--------",
+            f"  path             : {manifest_meta.get('manifest_path', args.manifest_csv)}",
+            f"  version          : {manifest_meta.get('manifest_version', 'n/a')}",
+            f"  member count     : {manifest_meta.get('manifest_member_count', 'n/a')}",
+            f"  compressed GiB   : {manifest_meta.get('manifest_total_gib', 'n/a')}",
+            "",
+            "Cache metadata",
+            "--------------",
+            f"  cache-dir        : {cache_dir}",
+            f"  events written   : {cache_meta.get('total_events_written', n_events)}",
+            f"  chunks           : {cache_meta.get('chunks_written', 'n/a')}",
+            f"  max-events cap   : {cache_meta.get('max_events_safety_cap', 'n/a')}",
+            f"  include_raw_json : {cache_meta.get('include_raw_json', False)}",
+            f"  timestamp rule   : {cache_meta.get('timestamp_conversion_rule', 'n/a')}",
+            f"  schema_version   : {cache_meta.get('schema_version', SCHEMA_VERSION)}",
+            "",
+            "DuckDB (cache mode)",
+            "-------------------",
+            f"  memory_limit     : {args.duckdb_memory_limit}",
+            "    (DuckDB buffer-manager limit; approximate aggregates may allocate",
+            "     outside the buffer manager — not an absolute process-RAM ceiling)",
+            f"  threads          : {args.duckdb_threads}",
+            f"  temp_directory   : {duck_temp}",
+            "  preserve_insertion_order: false",
+            "",
+            f"T3 rows: {len(t3_rows)}   T4 issues: {len(t4_rows)}",
+            "",
+            f"T3 notes ({SCHEMA_VERSION}, memory-conscious bounded-query full cache)",
+            "-" * (len(SCHEMA_VERSION) + 52),
+            "  Audits every SLIM_EVENT_COLUMNS field with field_role and",
+            "  overall + applicable missingness. Object-specific decisions use",
+            "  applicable object rows. Absent applicable types → review/not assessable.",
+            "  host_raw is not dropped for single-host constancy. Diagnostic fields",
+            "  (parse_error, etc.) are retained when empty by design.",
+            "  unmapped_property_keys_raw: empty → keep (drift monitor);",
+            "  non-empty → review (schema drift). 'drop' excludes from the default",
+            "  modeling feature set only — columns remain in the normalized schema.",
+            "  Decisions from capped/single-host samples are PRELIMINARY.",
+            "",
+            "  Exact metrics (decision-critical):",
+            "    - total_rows, applicable_rows",
+            "    - missing_percent_overall / missing_percent_applicable",
+            "    - empty vs non-empty detection (including discovery zero-vs-nonzero)",
+            "    - empty/constant vs nonconstant via nonempty count + MIN/MAX",
+            "    - keep/review/drop from the above exact signals",
+            "",
+            "  Approximate / bounded descriptive metrics:",
+            "    - unique_count for nonconstant fields: APPROX_COUNT_DISTINCT",
+            "      (labeled unique_count_method=approx_count_distinct;",
+            "       reasons say 'approximately N unique values')",
+            "    - top_3_values for selected categoricals: APPROX_TOP_K",
+            "      (labeled top_3_values_method=approx_top_k)",
+            "    - identifier/provenance/high-cardinality fields: top-3 skipped;",
+            "      example_value retained via ANY_VALUE",
+            "      (labeled top_3_values_method=skipped_high_cardinality)",
+            "",
+            "  T3 uses one primary GROUP BY source_type aggregate scan over the",
+            "  cache payload (not 77 independent full-cache scans, and not",
+            "  unbounded per-field COUNT DISTINCT / full-domain GROUP BY).",
+            "  After T3, source_type aggregate totals are cross-checked against",
+            "  cache_metadata.json total_events_written when present.",
+        ]
+        (out_dir / "README_eda02_schema_quality.txt").write_text(
+            "\n".join(lines), encoding="utf-8"
+        )
+        print(f"  [README] {out_dir / 'README_eda02_schema_quality.txt'}")
+
+        print(f"\n{'='*60}")
+        print(f"EDA 2 COMPLETE  {pilot_label}")
+        print(f"  Events (cache) : {n_events:,}")
+        print(f"  T3 rows        : {len(t3_rows)}")
+        print(f"  T4 issues      : {len(t4_rows)}")
+        print(f"{'='*60}")
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        if spill_owned and duck_temp:
+            shutil.rmtree(duck_temp, ignore_errors=True)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
