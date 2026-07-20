@@ -33,13 +33,16 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import pathlib
+import re
+import shutil
 import sys
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 # ── Local import ──────────────────────────────────────────────────────────
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from optc_streaming_parser import stream_from_archives   # type: ignore
+from optc_streaming_parser import SCHEMA_VERSION, stream_from_archives   # type: ignore
 
 # ── Window sizes to evaluate ──────────────────────────────────────────────
 _WINDOW_SIZES = ["1min", "5min", "15min", "1h", "1d"]
@@ -68,6 +71,25 @@ _COVERAGE_MIN_MEMBERS = 3
 _COVERAGE_MIN_DATES = 2
 _COVERAGE_MIN_SPAN_HOURS = 24.0
 _COVERAGE_MIN_PARSEABLE_PCT = 95.0
+
+# Final T5 column order (legacy columns preserved; cache-mode labels appended).
+T5_COLUMNS = [
+    "window_size",
+    "number_of_windows",
+    "median_events_per_window",
+    "mean_events_per_window",
+    "empty_window_percent",
+    "median_unique_hosts",
+    "median_unique_processes",
+    "median_unique_destinations",
+    "recommendation_primary_backup_no",
+    "reason",
+    "median_unique_hosts_method",
+    "median_unique_processes_method",
+    "median_unique_destinations_method",
+]
+
+_PARSEABLE_TS_PRED = "TRY_CAST(timestamp_parsed AS TIMESTAMP) IS NOT NULL"
 
 
 def assess_coverage_metrics(
@@ -199,34 +221,95 @@ def assess_coverage_from_df(df, n_events: int, n_parseable: int) -> dict:
     )
 
 
-def assess_coverage_from_cache(con, n_events: int, n_parseable: int) -> dict:
-    """Coverage metrics via DuckDB over the normalized cache."""
+def fetch_cache_baseline(con, cache_meta: dict) -> dict:
+    """
+    One bounded aggregate: total/parseable counts, coverage distincts,
+    and timestamp min/max for window span calculations.
+    """
     row = con.execute(
-        """
+        f"""
         SELECT
-          COUNT(DISTINCT NULLIF(CAST(archive_name AS VARCHAR), '')),
-          COUNT(DISTINCT NULLIF(CAST(member_name AS VARCHAR), '')),
-          COUNT(DISTINCT NULLIF(CAST(host_raw AS VARCHAR), '')),
+          COUNT(*)::BIGINT AS n_total,
+          COUNT(*) FILTER (WHERE {_PARSEABLE_TS_PRED})::BIGINT AS n_parseable,
+          COUNT(DISTINCT NULLIF(CAST(archive_name AS VARCHAR), ''))::BIGINT,
+          COUNT(DISTINCT NULLIF(CAST(member_name AS VARCHAR), ''))::BIGINT,
+          COUNT(DISTINCT NULLIF(CAST(host_raw AS VARCHAR), ''))::BIGINT,
           COUNT(DISTINCT date_trunc(
-              'day', TRY_CAST(timestamp_parsed AS TIMESTAMP))),
-          MIN(TRY_CAST(timestamp_parsed AS TIMESTAMP)),
-          MAX(TRY_CAST(timestamp_parsed AS TIMESTAMP))
+              'day', TRY_CAST(timestamp_parsed AS TIMESTAMP))) FILTER (
+            WHERE {_PARSEABLE_TS_PRED}
+          )::BIGINT,
+          MIN(TRY_CAST(timestamp_parsed AS TIMESTAMP)) FILTER (
+            WHERE {_PARSEABLE_TS_PRED}
+          ),
+          MAX(TRY_CAST(timestamp_parsed AS TIMESTAMP)) FILTER (
+            WHERE {_PARSEABLE_TS_PRED}
+          )
         FROM events
-        WHERE timestamp_parsed IS NOT NULL
-          AND CAST(timestamp_parsed AS VARCHAR) != ''
         """
     ).fetchone()
-    n_arch, n_mem, n_hosts, n_dates, tmin, tmax = row
-    # Archives/members/hosts should count all rows, not only parseable ts.
-    n_arch_all = con.execute(
-        "SELECT COUNT(DISTINCT NULLIF(CAST(archive_name AS VARCHAR), '')) FROM events"
-    ).fetchone()[0]
-    n_mem_all = con.execute(
-        "SELECT COUNT(DISTINCT NULLIF(CAST(member_name AS VARCHAR), '')) FROM events"
-    ).fetchone()[0]
-    n_hosts_all = con.execute(
-        "SELECT COUNT(DISTINCT NULLIF(CAST(host_raw AS VARCHAR), '')) FROM events"
-    ).fetchone()[0]
+    (
+        scanned_total, n_parseable, n_arch, n_mem, n_hosts,
+        n_dates, tmin, tmax,
+    ) = row
+    scanned_total = int(scanned_total)
+    n_parseable = int(n_parseable)
+    meta_total = cache_meta.get("total_events_written")
+    if meta_total is not None:
+        expected = int(meta_total)
+        if scanned_total != expected:
+            raise CacheAuditError(
+                f"Cache row-count integrity failed: DuckDB COUNT(*)="
+                f"{scanned_total:,} but cache_metadata.json "
+                f"total_events_written={expected:,}"
+            )
+        n_total = expected
+    else:
+        n_total = scanned_total
+
+    span_hours = 0.0
+    if tmin is not None and tmax is not None:
+        span_hours = (tmax - tmin).total_seconds() / 3600.0
+
+    coverage = assess_coverage_metrics(
+        n_events=n_total,
+        n_parseable=n_parseable,
+        unique_archives=int(n_arch or 0),
+        unique_members=int(n_mem or 0),
+        unique_hosts=int(n_hosts or 0),
+        unique_dates=int(n_dates or 0),
+        span_hours=float(span_hours),
+    )
+    return {
+        "n_total": n_total,
+        "n_parseable": n_parseable,
+        "tmin": tmin,
+        "tmax": tmax,
+        "coverage": coverage,
+    }
+
+
+def assess_coverage_from_cache(con, n_events: int, n_parseable: int) -> dict:
+    """Coverage metrics via one bounded DuckDB aggregate over the cache."""
+    row = con.execute(
+        f"""
+        SELECT
+          COUNT(DISTINCT NULLIF(CAST(archive_name AS VARCHAR), ''))::BIGINT,
+          COUNT(DISTINCT NULLIF(CAST(member_name AS VARCHAR), ''))::BIGINT,
+          COUNT(DISTINCT NULLIF(CAST(host_raw AS VARCHAR), ''))::BIGINT,
+          COUNT(DISTINCT date_trunc(
+              'day', TRY_CAST(timestamp_parsed AS TIMESTAMP))) FILTER (
+            WHERE {_PARSEABLE_TS_PRED}
+          )::BIGINT,
+          MIN(TRY_CAST(timestamp_parsed AS TIMESTAMP)) FILTER (
+            WHERE {_PARSEABLE_TS_PRED}
+          ),
+          MAX(TRY_CAST(timestamp_parsed AS TIMESTAMP)) FILTER (
+            WHERE {_PARSEABLE_TS_PRED}
+          )
+        FROM events
+        """
+    ).fetchone()
+    n_arch_all, n_mem_all, n_hosts_all, n_dates, tmin, tmax = row
     span_hours = 0.0
     if tmin is not None and tmax is not None:
         span_hours = (tmax - tmin).total_seconds() / 3600.0
@@ -820,6 +903,28 @@ def parse_args() -> argparse.Namespace:
                    help="Pilot manifest CSV (with --normalized-cache-dir)")
     p.add_argument("--normalized-cache-dir", default=None,
                    help="Parquet cache dir from build_normalized_pilot_cache.py")
+    p.add_argument(
+        "--duckdb-memory-limit",
+        default="4GB",
+        help=(
+            "DuckDB buffer-manager memory_limit for cache mode (default: 4GB). "
+            "Not an absolute process-RAM ceiling."
+        ),
+    )
+    p.add_argument(
+        "--duckdb-temp-dir",
+        default=None,
+        help=(
+            "Local DuckDB temp/spill directory for cache mode. "
+            "Default: local tempfile (never Drive)."
+        ),
+    )
+    p.add_argument(
+        "--duckdb-threads",
+        type=int,
+        default=2,
+        help="DuckDB threads for cache mode (default: 2; must be >= 1).",
+    )
     return p.parse_args()
 
 
@@ -833,118 +938,410 @@ _DUCK_WINDOW = {
     "1d": "INTERVAL 1 DAY",
 }
 
+# Fixed seconds for the five supported windows (bucket-aligned arithmetic).
+_WINDOW_SECONDS = {
+    "1min": 60,
+    "5min": 300,
+    "15min": 900,
+    "1h": 3600,
+    "1d": 86400,
+}
+
+# Hard cap for F3/F4 densified plotting grids only (not used by T5).
+# Far above a 10-day pilot's ~14,400 one-minute buckets.
+MAX_DENSE_PLOT_BUCKETS = 1_000_000
+
+_DUCKDB_MEMORY_LIMIT_RE = re.compile(
+    r"^\d+(\.\d+)?\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)$",
+    re.IGNORECASE,
+)
+
+
+class CacheAuditError(Exception):
+    """Fatal cache-mode validation / integrity failure."""
+
 
 def _load_cache_metadata(cache_dir: pathlib.Path) -> dict:
-    import json
     meta_path = cache_dir / "cache_metadata.json"
     if meta_path.exists():
         return json.loads(meta_path.read_text(encoding="utf-8"))
     return {}
 
 
-def _duck_conn(cache_dir: pathlib.Path):
+def _sql_string_literal(value: str) -> str:
+    if "\x00" in value:
+        raise CacheAuditError("DuckDB config value must not contain NUL bytes")
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _validate_duckdb_threads(threads: int) -> int:
+    try:
+        n = int(threads)
+    except (TypeError, ValueError) as exc:
+        raise CacheAuditError(
+            f"Invalid --duckdb-threads={threads!r}; must be an integer >= 1"
+        ) from exc
+    if n < 1:
+        raise CacheAuditError(
+            f"Invalid --duckdb-threads={threads}; must be >= 1"
+        )
+    return n
+
+
+def _validate_duckdb_memory_limit(memory_limit: str) -> str:
+    if memory_limit is None:
+        raise CacheAuditError("--duckdb-memory-limit is required")
+    s = str(memory_limit).strip()
+    if not s or not _DUCKDB_MEMORY_LIMIT_RE.match(s):
+        raise CacheAuditError(
+            f"Invalid --duckdb-memory-limit={memory_limit!r}; "
+            "expected a size like '4GB', '512MB', or '1.5GiB'"
+        )
+    if any(c in s for c in ";\n\r\\"):
+        raise CacheAuditError(
+            f"Invalid --duckdb-memory-limit={memory_limit!r}; "
+            "disallowed characters"
+        )
+    return s
+
+
+def _validate_duckdb_temp_dir(temp_dir: str) -> pathlib.Path:
+    if temp_dir is None or str(temp_dir).strip() == "":
+        raise CacheAuditError("DuckDB temp dir path must be non-empty")
+    s = str(temp_dir)
+    if "\x00" in s:
+        raise CacheAuditError("--duckdb-temp-dir must not contain NUL bytes")
+    if any(c in s for c in ";\n\r"):
+        raise CacheAuditError(
+            f"Invalid --duckdb-temp-dir={temp_dir!r}; disallowed characters"
+        )
+    return pathlib.Path(s)
+
+
+def _configure_duckdb(
+    con,
+    *,
+    memory_limit: str,
+    temp_dir: str,
+    threads: int,
+) -> None:
+    mem = _validate_duckdb_memory_limit(memory_limit)
+    spill = _validate_duckdb_temp_dir(temp_dir)
+    n_threads = _validate_duckdb_threads(threads)
+    con.execute(f"SET memory_limit={_sql_string_literal(mem)}")
+    con.execute(f"SET temp_directory={_sql_string_literal(str(spill))}")
+    con.execute(f"SET threads={n_threads}")
+    con.execute("SET preserve_insertion_order=false")
+
+
+def _duck_conn(
+    cache_dir: pathlib.Path,
+    *,
+    memory_limit: str = "4GB",
+    temp_dir: Optional[str] = None,
+    threads: int = 2,
+):
+    """
+    Open DuckDB over the cache glob with conservative settings.
+
+    Returns (connection, spill_temp_dir, spill_owned).
+    """
     import duckdb
-    con = duckdb.connect()
-    glob = str(pathlib.Path(cache_dir) / "*.parquet")
-    con.execute(f"CREATE VIEW events AS SELECT * FROM read_parquet('{glob}')")
-    return con
+    import tempfile
+
+    mem = _validate_duckdb_memory_limit(memory_limit)
+    n_threads = _validate_duckdb_threads(threads)
+    cache_dir = pathlib.Path(cache_dir)
+
+    spill: Optional[pathlib.Path] = None
+    spill_owned = False
+    con = None
+    try:
+        if temp_dir is not None:
+            spill = _validate_duckdb_temp_dir(temp_dir)
+            spill.mkdir(parents=True, exist_ok=True)
+            spill_owned = False
+        else:
+            spill = pathlib.Path(tempfile.mkdtemp(prefix="eda03_duckdb_tmp_"))
+            spill_owned = True
+
+        con = duckdb.connect()
+        _configure_duckdb(
+            con,
+            memory_limit=mem,
+            temp_dir=str(spill),
+            threads=n_threads,
+        )
+        glob = str(cache_dir / "*.parquet")
+        con.execute(
+            f"CREATE VIEW events AS SELECT * FROM read_parquet("
+            f"{_sql_string_literal(glob)})"
+        )
+        return con, str(spill), spill_owned
+    except Exception:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        if spill_owned and spill is not None:
+            shutil.rmtree(spill, ignore_errors=True)
+        raise
 
 
-def compute_t5_from_cache(con, coverage: dict | None = None) -> list:
-    """Window comparison via DuckDB time buckets — no full event DataFrame."""
+def fetch_cache_event_counts(con, cache_meta: dict) -> Tuple[int, int, Optional[int]]:
+    """
+    Return (n_total, n_parseable, metadata_total_or_none).
+
+    Prefer fetch_cache_baseline() when coverage and bounds are also needed.
+    """
+    baseline = fetch_cache_baseline(con, cache_meta)
+    meta_total = cache_meta.get("total_events_written")
+    return (
+        baseline["n_total"],
+        baseline["n_parseable"],
+        int(meta_total) if meta_total is not None else None,
+    )
+
+
+def fetch_window_buckets(con, window_size: str):
+    """
+    One bounded GROUP BY time_bucket scan for a candidate window.
+
+    Exact per-bucket event counts and host distincts; approximate distincts
+    for process, destination, and user diversity.
+    """
+    import pandas as pd
+
+    interval = _DUCK_WINDOW[window_size]
+    sql = f"""
+        SELECT
+          time_bucket({interval}, TRY_CAST(timestamp_parsed AS TIMESTAMP)) AS bucket,
+          COUNT(*)::BIGINT AS n_events,
+          COUNT(DISTINCT NULLIF(CAST(host_raw AS VARCHAR), ''))::BIGINT AS u_hosts,
+          approx_count_distinct(
+            NULLIF(CAST(process_raw AS VARCHAR), '')
+          )::BIGINT AS u_procs,
+          approx_count_distinct(
+            NULLIF(CAST(destination_raw AS VARCHAR), '')
+          )::BIGINT AS u_dests,
+          approx_count_distinct(
+            NULLIF(CAST(user_raw AS VARCHAR), '')
+          )::BIGINT AS u_users
+        FROM events
+        WHERE {_PARSEABLE_TS_PRED}
+        GROUP BY 1
+        ORDER BY 1
+        """
+    return con.execute(sql).fetchdf()
+
+
+def assert_bucket_sums_match_parseable(
+    buckets,
+    n_parseable: int,
+    window_size: str,
+) -> None:
+    """Require SUM(bucket event counts) == exact parseable timestamp count."""
+    import pandas as pd
+
+    if buckets is None or (isinstance(buckets, pd.DataFrame) and buckets.empty):
+        if n_parseable == 0:
+            return
+        raise CacheAuditError(
+            f"T5 bucket integrity failed for {window_size}: no buckets but "
+            f"n_parseable={n_parseable:,}"
+        )
+    summed = int(buckets["n_events"].sum())
+    if summed != int(n_parseable):
+        raise CacheAuditError(
+            f"T5 bucket integrity failed for {window_size}: "
+            f"SUM(n_events)={summed:,} != parseable count {int(n_parseable):,}"
+        )
+
+
+def _aligned_bucket_window_count(first_bucket, last_bucket, window_size: str) -> int:
+    """
+    Exact number_of_windows from already-aligned DuckDB bucket timestamps.
+
+    ((last_bucket - first_bucket) // window_seconds) + 1
+    """
+    seconds = _WINDOW_SECONDS[window_size]
+    delta_s = (last_bucket - first_bucket).total_seconds()
+    if delta_s < 0:
+        raise CacheAuditError(
+            f"Invalid bucket span for {window_size}: "
+            f"first={first_bucket}, last={last_bucket}"
+        )
+    return int(delta_s // seconds) + 1
+
+
+def densify_bucket_table(buckets, window_size: str):
+    """
+    Expand retained non-empty buckets to a complete time grid and fill missing
+    windows with zeros. Plotting-only: never used by T5 metric calculation.
+    Raises CacheAuditError before allocating if the dense grid exceeds
+    MAX_DENSE_PLOT_BUCKETS (protects against timestamp outliers).
+    """
+    import pandas as pd
+
+    if buckets is None or buckets.empty:
+        return buckets
+
+    first = buckets["bucket"].min()
+    last = buckets["bucket"].max()
+    requested = _aligned_bucket_window_count(first, last, window_size)
+    if requested > MAX_DENSE_PLOT_BUCKETS:
+        raise CacheAuditError(
+            f"Refusing to densify F3/F4 plot grid for window={window_size}: "
+            f"requested {requested:,} buckets exceeds "
+            f"MAX_DENSE_PLOT_BUCKETS={MAX_DENSE_PLOT_BUCKETS:,}. "
+            f"first_bucket={first}, last_bucket={last}. "
+            f"This usually indicates a timestamp outlier or unexpectedly "
+            f"large span; review timestamp_min/max before plotting."
+        )
+
+    freq = _FREQ_MAP[window_size]
+    full = pd.DataFrame({"bucket": pd.date_range(start=first, end=last, freq=freq)})
+    dense = full.merge(buckets, how="left", on="bucket")
+    for col in ("n_events", "u_hosts", "u_procs", "u_dests", "u_users"):
+        if col in dense.columns:
+            dense[col] = dense[col].fillna(0).astype("int64")
+    return dense
+
+
+def _t5_row_from_buckets(
+    buckets,
+    window_size: str,
+    *,
+    tmin,
+    tmax,
+    n_parseable: int,
+) -> dict:
+    """
+    Build one T5 row from a retained per-window bucket table.
+
+    number_of_windows is computed arithmetically from aligned first/last
+    bucket timestamps — no dense DataFrame allocation.
+    """
     import numpy as np
 
-    bounds = con.execute(
-        """
-        SELECT MIN(TRY_CAST(timestamp_parsed AS TIMESTAMP)),
-               MAX(TRY_CAST(timestamp_parsed AS TIMESTAMP)),
-               COUNT(*) FILTER (
-                 WHERE timestamp_parsed IS NOT NULL
-                   AND CAST(timestamp_parsed AS VARCHAR) != '')
-        FROM events
-        """
-    ).fetchone()
-    tmin, tmax, n_parseable = bounds
-    if tmin is None or tmax is None or n_parseable == 0:
-        return []
+    assert_bucket_sums_match_parseable(buckets, n_parseable, window_size)
 
-    rows = []
-    for ws, interval in _DUCK_WINDOW.items():
-        counts = con.execute(
-            f"""
-            SELECT time_bucket({interval}, TRY_CAST(timestamp_parsed AS TIMESTAMP)) AS b,
-                   COUNT(*) AS n,
-                   COUNT(DISTINCT NULLIF(host_raw, '')) AS u_hosts,
-                   COUNT(DISTINCT NULLIF(process_raw, '')) AS u_procs,
-                   COUNT(DISTINCT NULLIF(destination_raw, '')) AS u_dests
-            FROM events
-            WHERE timestamp_parsed IS NOT NULL AND CAST(timestamp_parsed AS VARCHAR) != ''
-            GROUP BY 1
-            ORDER BY 1
-            """
-        ).fetchdf()
-
-        if counts.empty:
-            rows.append({
-                "window_size": ws, "number_of_windows": 0,
-                "median_events_per_window": 0, "mean_events_per_window": 0,
-                "empty_window_percent": 100.0,
-                "median_unique_hosts": 0, "median_unique_processes": 0,
-                "median_unique_destinations": 0,
-                "recommendation_primary_backup_no": "pending", "reason": "pending",
-            })
-            continue
-
-        # Expected window count from span
-        delta_s = (tmax - tmin).total_seconds()
-        seconds = {"1min": 60, "5min": 300, "15min": 900, "1h": 3600, "1d": 86400}[ws]
-        expected = max(1, int(delta_s // seconds) + 1)
-        n_nonempty = int(len(counts))
-        n_windows = max(expected, n_nonempty)
-        empty_pct = round(max(0.0, (n_windows - n_nonempty) / n_windows * 100), 1)
-
-        rows.append({
-            "window_size": ws,
-            "number_of_windows": n_windows,
-            "median_events_per_window": round(float(np.median(counts["n"])), 1),
-            "mean_events_per_window": round(float(counts["n"].mean()), 1),
-            "empty_window_percent": empty_pct,
-            "median_unique_hosts": round(float(np.median(counts["u_hosts"])), 1),
-            "median_unique_processes": round(float(np.median(counts["u_procs"])), 1),
-            "median_unique_destinations": round(float(np.median(counts["u_dests"])), 1),
+    if buckets.empty or n_parseable == 0:
+        return {
+            "window_size": window_size,
+            "number_of_windows": 0,
+            "median_events_per_window": 0,
+            "mean_events_per_window": 0,
+            "empty_window_percent": 100.0,
+            "median_unique_hosts": 0,
+            "median_unique_processes": 0,
+            "median_unique_destinations": 0,
             "recommendation_primary_backup_no": "pending",
             "reason": "pending",
-        })
+            "median_unique_hosts_method": "exact_count_distinct",
+            "median_unique_processes_method": "approx_count_distinct",
+            "median_unique_destinations_method": "approx_count_distinct",
+        }
 
-    return _apply_window_recommendations(rows, coverage or {"status": "ok"})
+    first = buckets["bucket"].min()
+    last = buckets["bucket"].max()
+    n_windows = _aligned_bucket_window_count(first, last, window_size)
+    # Retained DuckDB buckets are nonempty event windows only.
+    n_nonempty = int(len(buckets))
+    empty_pct = round(max(0.0, (n_windows - n_nonempty) / max(n_windows, 1) * 100), 1)
+
+    def _median_nonempty(col: str) -> float:
+        s = buckets.loc[buckets[col] > 0, col]
+        return round(float(np.median(s)), 1) if len(s) else 0.0
+
+    return {
+        "window_size": window_size,
+        "number_of_windows": n_windows,
+        # Legacy behavior: compute event density over non-empty event windows.
+        "median_events_per_window": round(float(np.median(buckets["n_events"])), 1),
+        "mean_events_per_window": round(float(buckets["n_events"].mean()), 1),
+        "empty_window_percent": empty_pct,
+        "median_unique_hosts": _median_nonempty("u_hosts"),
+        "median_unique_processes": _median_nonempty("u_procs"),
+        "median_unique_destinations": _median_nonempty("u_dests"),
+        "recommendation_primary_backup_no": "pending",
+        "reason": "pending",
+        "median_unique_hosts_method": "exact_count_distinct",
+        "median_unique_processes_method": "approx_count_distinct",
+        "median_unique_destinations_method": "approx_count_distinct",
+    }
 
 
-def plot_f3_from_cache(con, out_dir, figures_dir, window_label, pilot_label) -> None:
+def compute_t5_from_cache(
+    con,
+    coverage: dict | None = None,
+    *,
+    n_parseable: int,
+    tmin,
+    tmax,
+) -> Tuple[list, Dict[str, object]]:
+    """
+    Window comparison via one bucket scan per candidate window size.
+
+    Returns (t5_rows, buckets_by_window). Bucket tables are retained for F3/F4
+    reuse on the selected primary window — no additional full-cache scans.
+    """
+    if tmin is None or tmax is None or n_parseable == 0:
+        return [], {}
+
+    rows = []
+    buckets_by_window: Dict[str, object] = {}
+    for ws in _WINDOW_SIZES:
+        print(f"[T5] Bucket scan for window {ws} ...", flush=True)
+        buckets = fetch_window_buckets(con, ws)
+        buckets_by_window[ws] = buckets
+        rows.append(
+            _t5_row_from_buckets(
+                buckets, ws, tmin=tmin, tmax=tmax, n_parseable=n_parseable
+            )
+        )
+        print(
+            f"[T5] Window {ws}: {len(buckets)} nonempty buckets; "
+            f"SUM(n_events)={int(buckets['n_events'].sum()) if not buckets.empty else 0:,} "
+            f"(parseable={n_parseable:,})",
+            flush=True,
+        )
+
+    return _apply_window_recommendations(rows, coverage or {"status": "ok"}), (
+        buckets_by_window
+    )
+
+
+def plot_f3_from_buckets(
+    buckets,
+    out_dir,
+    figures_dir,
+    window_label: str,
+    pilot_label: str,
+) -> None:
+    """Plot event volume from a retained bucket table (no cache rescan)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import pandas as pd
 
-    interval = _DUCK_WINDOW.get(window_label, "INTERVAL 15 MINUTE")
-    series = con.execute(
-        f"""
-        SELECT time_bucket({interval}, TRY_CAST(timestamp_parsed AS TIMESTAMP)) AS t,
-               COUNT(*) AS n
-        FROM events
-        WHERE timestamp_parsed IS NOT NULL AND CAST(timestamp_parsed AS VARCHAR) != ''
-        GROUP BY 1 ORDER BY 1
-        """
-    ).fetchdf().dropna()
-    if series.empty:
+    if buckets is None or not isinstance(buckets, pd.DataFrame) or buckets.empty:
         print("  [F3] No parseable timestamps — skipping.", file=sys.stderr)
         return
+
+    series = densify_bucket_table(buckets, window_label)[["bucket", "n_events"]].dropna()
     fig, ax = plt.subplots(figsize=(13, 4))
-    ax.fill_between(series["t"], series["n"], alpha=0.7, color="#4472C4", step="mid")
-    ax.plot(series["t"], series["n"], color="#2B579A", linewidth=0.8)
+    ax.fill_between(
+        series["bucket"], series["n_events"], alpha=0.7, color="#4472C4", step="mid"
+    )
+    ax.plot(series["bucket"], series["n_events"], color="#2B579A", linewidth=0.8)
     ax.set_xlabel("Time (UTC)", fontsize=11)
     ax.set_ylabel(f"Events per {window_label} window", fontsize=11)
     ax.set_title(
         f"F3 — Event Volume Over Time  (window: {window_label})  {pilot_label}\n"
-        "[No ground-truth overlay — attack/benign intervals NOT shown]",
+        "[Exact per-window event counts from retained buckets | "
+        "No ground-truth overlay]",
         fontsize=10,
     )
     ax.tick_params(axis="x", rotation=30)
@@ -953,44 +1350,56 @@ def plot_f3_from_cache(con, out_dir, figures_dir, window_label, pilot_label) -> 
     plt.close(fig)
 
 
-def plot_f4_from_cache(con, out_dir, figures_dir, window_label, pilot_label) -> None:
+def plot_f4_from_buckets(
+    buckets,
+    out_dir,
+    figures_dir,
+    window_label: str,
+    pilot_label: str,
+) -> None:
+    """Plot entity diversity from retained buckets (no cache rescan)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import pandas as pd
 
-    interval = _DUCK_WINDOW.get(window_label, "INTERVAL 15 MINUTE")
-    colors = {"hosts": "#4472C4", "processes": "#ED7D31",
-              "destinations": "#70AD47", "users": "#A5A5A5"}
+    if buckets is None or not isinstance(buckets, pd.DataFrame) or buckets.empty:
+        print("  [F4] No parseable timestamps — skipping.", file=sys.stderr)
+        return
+
+    dense = densify_bucket_table(buckets, window_label)
+    series_specs = [
+        ("unique hosts (exact)", "u_hosts", "#4472C4"),
+        ("unique processes (~approx)", "u_procs", "#ED7D31"),
+        ("unique destinations (~approx)", "u_dests", "#70AD47"),
+        ("unique users (~approx)", "u_users", "#A5A5A5"),
+    ]
     fig, ax = plt.subplots(figsize=(13, 4))
     any_plotted = False
-    for label, col, color in [
-        ("hosts", "host_raw", colors["hosts"]),
-        ("processes", "process_raw", colors["processes"]),
-        ("destinations", "destination_raw", colors["destinations"]),
-        ("users", "user_raw", colors["users"]),
-    ]:
-        s = con.execute(
-            f"""
-            SELECT time_bucket({interval}, TRY_CAST(timestamp_parsed AS TIMESTAMP)) AS t,
-                   COUNT(DISTINCT NULLIF({col}, '')) AS n
-            FROM events
-            WHERE timestamp_parsed IS NOT NULL AND CAST(timestamp_parsed AS VARCHAR) != ''
-            GROUP BY 1 ORDER BY 1
-            """
-        ).fetchdf().dropna()
-        if s.empty or s["n"].sum() == 0:
+    for label, col, color in series_specs:
+        if col not in dense.columns:
             continue
-        ax.plot(s["t"], s["n"], label=f"unique {label}", color=color,
-                linewidth=1.4, marker=".", markersize=3)
+        s = dense[["bucket", col]]
+        if s.empty or int(s[col].sum()) == 0:
+            continue
+        ax.plot(
+            s["bucket"], s[col], label=label, color=color,
+            linewidth=1.4, marker=".", markersize=3,
+        )
         any_plotted = True
+
     if not any_plotted:
-        ax.text(0.5, 0.5, "No entity data available",
-                transform=ax.transAxes, ha="center", va="center")
+        ax.text(
+            0.5, 0.5, "No entity data available",
+            transform=ax.transAxes, ha="center", va="center",
+        )
+
     ax.set_xlabel("Time (UTC)", fontsize=11)
-    ax.set_ylabel(f"Unique entities per {window_label} window", fontsize=11)
+    ax.set_ylabel(f"Entities per {window_label} window", fontsize=11)
     ax.set_title(
         f"F4 — Entity Diversity Over Time  (window: {window_label})  {pilot_label}\n"
-        "[No ground-truth overlay — attack/benign intervals NOT shown]",
+        "[Hosts exact; processes/destinations/users approximate | "
+        "No ground-truth overlay]",
         fontsize=10,
     )
     if any_plotted:
@@ -1002,7 +1411,6 @@ def plot_f4_from_cache(con, out_dir, figures_dir, window_label, pilot_label) -> 
 
 
 def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -> None:
-    import json
     import pandas as pd
     from manifest_utils import load_manifest
 
@@ -1013,6 +1421,15 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
     if args.archives or args.member_name_contains:
         print("[ERROR] Cache mode: do not pass --archives or --member-name-contains.",
               file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        _validate_duckdb_threads(args.duckdb_threads)
+        _validate_duckdb_memory_limit(args.duckdb_memory_limit)
+        if args.duckdb_temp_dir is not None:
+            _validate_duckdb_temp_dir(args.duckdb_temp_dir)
+    except CacheAuditError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(1)
 
     manifest_meta = {}
@@ -1026,7 +1443,8 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
     cache_meta = _load_cache_metadata(cache_dir)
     pilot_label = (
         f"[CACHE MODE: manifest={manifest_meta.get('manifest_version', 'unknown')}; "
-        f"events={cache_meta.get('total_events_written', '?')}]"
+        f"events={cache_meta.get('total_events_written', '?')}; "
+        f"schema={SCHEMA_VERSION}]"
     )
     ts_rule = cache_meta.get(
         "timestamp_conversion_rule",
@@ -1035,101 +1453,183 @@ def run_eda03_cache_mode(args, project_root, out_dir, tables_dir, figures_dir) -
 
     print(f"\n{'='*60}")
     print(f"EDA 3 — Time Alignment and Window Selection  {pilot_label}")
-    print(f"  cache-dir    : {cache_dir}")
-    print(f"  manifest-csv : {args.manifest_csv}")
-    print(f"  output-dir   : {out_dir}")
+    print(f"  cache-dir     : {cache_dir}")
+    print(f"  manifest-csv  : {args.manifest_csv}")
+    print(f"  output-dir    : {out_dir}")
+    print(f"  schema        : {SCHEMA_VERSION}")
+    print(f"  duckdb-memory : {args.duckdb_memory_limit} (buffer-manager limit)")
+    print(f"  duckdb-threads: {args.duckdb_threads}")
+    print(f"  duckdb-temp   : {args.duckdb_temp_dir or '(local tempfile)'}")
     print(f"{'='*60}\n")
 
-    con = _duck_conn(cache_dir)
-    n_total = con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-    n_parseable = con.execute(
-        """
-        SELECT COUNT(*) FROM events
-        WHERE timestamp_parsed IS NOT NULL AND CAST(timestamp_parsed AS VARCHAR) != ''
-        """
-    ).fetchone()[0]
-    print(f"[INFO] Cache events: {n_total:,}; parseable timestamps: {n_parseable:,}")
+    con = None
+    duck_temp = None
+    spill_owned = False
+    try:
+        try:
+            con, duck_temp, spill_owned = _duck_conn(
+                cache_dir,
+                memory_limit=args.duckdb_memory_limit,
+                temp_dir=args.duckdb_temp_dir,
+                threads=args.duckdb_threads,
+            )
+        except CacheAuditError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as exc:
+            print(f"[ERROR] Failed to open DuckDB over cache: {exc}", file=sys.stderr)
+            sys.exit(1)
 
-    coverage = assess_coverage_from_cache(con, n_total, n_parseable)
-    sampling_strategy = cache_meta.get("sampling_strategy") or "full"
-    coverage = apply_sampling_strategy_gate(coverage, sampling_strategy)
-    print(f"[INFO] Coverage gate: {coverage['status']} "
-          f"(sampling_strategy={sampling_strategy})")
-    for cond in coverage.get("failed_conditions") or []:
-        print(f"  - failed: {cond}")
-
-    print("\nComputing T5 from cache ...")
-    t5_rows = compute_t5_from_cache(con, coverage=coverage)
-    t5_df = pd.DataFrame(t5_rows) if t5_rows else pd.DataFrame(columns=[
-        "window_size", "number_of_windows", "median_events_per_window",
-        "mean_events_per_window", "empty_window_percent",
-        "median_unique_hosts", "median_unique_processes", "median_unique_destinations",
-        "recommendation_primary_backup_no", "reason",
-    ])
-    _save_csv(t5_df, out_dir / "T5_window_size_comparison.csv",
-              tables_dir / "T5_window_size_comparison.csv")
-
-    primary_row = next(
-        (r for r in t5_rows if r.get("recommendation_primary_backup_no") == "primary"),
-        None,
-    )
-    # Figures still generated when review_needed; default plot window 15min.
-    primary_ws = primary_row["window_size"] if primary_row else "15min"
-
-    print("\nGenerating F3/F4 from cache ...")
-    plot_f3_from_cache(con, out_dir, figures_dir, primary_ws, pilot_label)
-    plot_f4_from_cache(con, out_dir, figures_dir, primary_ws, pilot_label)
-
-    if t5_rows:
-        primary_ws_final, backup_ws_final = write_n1(
-            t5_rows, out_dir, pilot_label, n_total, n_parseable, ts_rule,
-            coverage=coverage,
+        print(
+            f"[INFO] DuckDB configured: memory_limit={args.duckdb_memory_limit} "
+            f"(buffer-manager limit; not an absolute process-RAM ceiling), "
+            f"threads={args.duckdb_threads}, temp_directory={duck_temp}",
+            flush=True,
         )
-    else:
-        primary_ws_final = backup_ws_final = "review_needed"
 
-    # README with cache/manifest info
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    lines = [
-        "EDA 3 — Time Alignment and Window Selection (CACHE MODE)",
-        "=" * 50,
-        f"Generated (UTC): {now}",
-        f"Pilot label    : {pilot_label}",
-        "",
-        "Mode: DuckDB aggregates over normalized Parquet cache.",
-        "No ground-truth overlay. No attack/benign/MITRE labels.",
-        "",
-        f"Manifest version : {manifest_meta.get('manifest_version', 'n/a')}",
-        f"Manifest path    : {manifest_meta.get('manifest_path', args.manifest_csv)}",
-        f"Cache dir        : {cache_dir}",
-        f"Events           : {n_total:,} (parseable ts: {n_parseable:,})",
-        f"max-events cap   : {cache_meta.get('max_events_safety_cap', 'n/a')}",
-        f"Timestamp rule   : {ts_rule}",
-        f"Primary window   : {primary_ws_final}",
-        f"Backup window    : {backup_ws_final}",
-        f"sampling_strategy: {sampling_strategy}",
-        f"sampling_limitation: {cache_meta.get('sampling_limitation', 'n/a')}",
-        "",
-    ]
-    lines += format_coverage_block(coverage)
-    lines += [
-        "",
-        "Primary/backup are issued ONLY when all coverage gates pass;",
-        "otherwise review_needed (T5 and figures are still generated).",
-    ]
-    (out_dir / "README_eda03_time_alignment.txt").write_text(
-        "\n".join(lines), encoding="utf-8"
-    )
-    print(f"  [README] {out_dir / 'README_eda03_time_alignment.txt'}")
-    con.close()
+        print("[INFO] Baseline cache aggregate (counts + coverage + bounds) ...",
+              flush=True)
+        try:
+            baseline = fetch_cache_baseline(con, cache_meta)
+        except CacheAuditError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            sys.exit(1)
+        n_total = baseline["n_total"]
+        n_parseable = baseline["n_parseable"]
+        tmin = baseline["tmin"]
+        tmax = baseline["tmax"]
+        coverage = baseline["coverage"]
+        print(
+            f"[INFO] Cache events: {n_total:,}; parseable timestamps: "
+            f"{n_parseable:,}",
+            flush=True,
+        )
+        print(
+            f"[INFO] Baseline timestamp_min={tmin}; timestamp_max={tmax}",
+            flush=True,
+        )
 
-    print(f"\n{'='*60}")
-    print(f"EDA 3 COMPLETE  {pilot_label}")
-    print(f"  Events total         : {n_total:,}")
-    print(f"  Events with valid ts : {n_parseable:,}")
-    print(f"  Coverage gate        : {coverage['status']}")
-    print(f"  Recommended window   : {primary_ws_final} (backup: {backup_ws_final})")
-    print(f"{'='*60}")
+        sampling_strategy = cache_meta.get("sampling_strategy") or "full"
+        coverage = apply_sampling_strategy_gate(coverage, sampling_strategy)
+        print(f"[INFO] Coverage gate: {coverage['status']} "
+              f"(sampling_strategy={sampling_strategy})")
+        for cond in coverage.get("failed_conditions") or []:
+            print(f"  - failed: {cond}")
+
+        print("\nComputing T5 from cache (one bucket scan per window) ...", flush=True)
+        t5_rows, buckets_by_window = compute_t5_from_cache(
+            con,
+            coverage=coverage,
+            n_parseable=n_parseable,
+            tmin=tmin,
+            tmax=tmax,
+        )
+        t5_df = pd.DataFrame(t5_rows) if t5_rows else pd.DataFrame(columns=T5_COLUMNS)
+        if not t5_df.empty:
+            t5_df = t5_df.reindex(columns=T5_COLUMNS)
+        _save_csv(t5_df, out_dir / "T5_window_size_comparison.csv",
+                  tables_dir / "T5_window_size_comparison.csv")
+
+        primary_row = next(
+            (r for r in t5_rows if r.get("recommendation_primary_backup_no") == "primary"),
+            None,
+        )
+        primary_ws = primary_row["window_size"] if primary_row else "15min"
+        primary_buckets = buckets_by_window.get(primary_ws)
+
+        print(
+            f"\nGenerating F3/F4 from retained {primary_ws} buckets "
+            f"(no additional cache scan) ...",
+            flush=True,
+        )
+        plot_f3_from_buckets(
+            primary_buckets, out_dir, figures_dir, primary_ws, pilot_label
+        )
+        plot_f4_from_buckets(
+            primary_buckets, out_dir, figures_dir, primary_ws, pilot_label
+        )
+
+        if t5_rows:
+            primary_ws_final, backup_ws_final = write_n1(
+                t5_rows, out_dir, pilot_label, n_total, n_parseable, ts_rule,
+                coverage=coverage,
+            )
+        else:
+            primary_ws_final = backup_ws_final = "review_needed"
+
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lines = [
+            "EDA 3 — Time Alignment and Window Selection (CACHE MODE)",
+            "=" * 50,
+            f"Generated (UTC): {now}",
+            f"Pilot label    : {pilot_label}",
+            f"Schema version : {SCHEMA_VERSION}",
+            "",
+            "Mode: memory-conscious DuckDB aggregates over normalized Parquet cache.",
+            "No ground-truth overlay. No attack/benign/MITRE labels.",
+            "",
+            f"Manifest version : {manifest_meta.get('manifest_version', 'n/a')}",
+            f"Manifest path    : {manifest_meta.get('manifest_path', args.manifest_csv)}",
+            f"Cache dir        : {cache_dir}",
+            f"Events           : {n_total:,} (parseable ts: {n_parseable:,})",
+            f"max-events cap   : {cache_meta.get('max_events_safety_cap', 'n/a')}",
+            f"Timestamp rule   : {ts_rule}",
+            f"Primary window   : {primary_ws_final}",
+            f"Backup window    : {backup_ws_final}",
+            f"sampling_strategy: {sampling_strategy}",
+            f"sampling_limitation: {cache_meta.get('sampling_limitation', 'n/a')}",
+            "",
+            "DuckDB (cache mode)",
+            "-------------------",
+            f"  memory_limit     : {args.duckdb_memory_limit}",
+            "    (DuckDB buffer-manager limit; approximate aggregates may allocate",
+            "     outside the buffer manager — not an absolute process-RAM ceiling)",
+            f"  threads          : {args.duckdb_threads}",
+            f"  temp_directory   : {duck_temp}",
+            "  preserve_insertion_order: false",
+            "",
+            "T5 / figures (bounded full-cache design)",
+            "----------------------------------------",
+            "  Exact (decision-critical): total events, parseable timestamp count,",
+            "  timestamp span, coverage distinct archives/members/hosts/dates,",
+            "  per-window event counts, empty-window %, median/mean events/window,",
+            "  per-window host distinct counts (low cardinality).",
+            "  median/mean event metrics are computed over non-empty event buckets",
+            "  (legacy behavior preserved).",
+            "  Approximate (descriptive): per-window process/destination/user",
+            "  diversity via APPROX_COUNT_DISTINCT (labeled in T5 columns and F4).",
+            "  One baseline aggregate + one bucket scan per candidate window;",
+            "  F3/F4 reuse the primary window bucket table (no rescan).",
+            "",
+        ]
+        lines += format_coverage_block(coverage)
+        lines += [
+            "",
+            "Primary/backup are issued ONLY when all coverage gates pass;",
+            "otherwise review_needed (T5 and figures are still generated).",
+            "sampling_strategy=full is treated as temporally representative",
+            "subject to the numeric coverage gates above.",
+        ]
+        (out_dir / "README_eda03_time_alignment.txt").write_text(
+            "\n".join(lines), encoding="utf-8"
+        )
+        print(f"  [README] {out_dir / 'README_eda03_time_alignment.txt'}")
+
+        print(f"\n{'='*60}")
+        print(f"EDA 3 COMPLETE  {pilot_label}")
+        print(f"  Events total         : {n_total:,}")
+        print(f"  Events with valid ts : {n_parseable:,}")
+        print(f"  Coverage gate        : {coverage['status']}")
+        print(f"  Recommended window   : {primary_ws_final} (backup: {backup_ws_final})")
+        print(f"{'='*60}")
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        if spill_owned and duck_temp:
+            shutil.rmtree(duck_temp, ignore_errors=True)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
