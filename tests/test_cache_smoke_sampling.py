@@ -90,6 +90,7 @@ def _slim_event(member: str, n: int) -> dict:
         "member_name": member,
         "line_number": str(n),
         "raw_event_id": f"{member}-{n}",
+        "file_id": n,
         "parse_status": "ok",
         "source_type": "endpoint",
         "host_raw": "h1",

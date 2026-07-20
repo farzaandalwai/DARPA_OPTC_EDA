@@ -484,6 +484,10 @@ def _error_record(
     return out
 
 
+class ResumeVerificationError(Exception):
+    """Checkpoint line missing or raw_event_id mismatch during resume."""
+
+
 def stream_events(
     archive_path: pathlib.Path,
     max_members: Optional[int] = None,
@@ -493,6 +497,10 @@ def stream_events(
     allowed_members: Optional[Set[str]] = None,
     include_raw_json: bool = True,
     quiet: bool = False,
+    resume_member: Optional[str] = None,
+    resume_after_line: Optional[int] = None,
+    resume_raw_event_id: Optional[str] = None,
+    start_file_id: int = 1,
 ) -> Iterator[dict]:
     """
     Yield normalized event dicts from a single .tar archive.
@@ -500,17 +508,13 @@ def stream_events(
     Streaming I/O: tar.extractfile → gzip.GzipFile → TextIOWrapper, line by line.
     The compressed member is NOT fully buffered into a BytesIO.
 
-    Parameters
-    ----------
-    archive_path          : path to the .tar file
-    max_members           : stop after this many matching members (None = all);
-                            ignored when allowed_members is set (exact set used)
-    max_events            : global cap on total events yielded (None = unlimited)
-    max_events_per_member : cap per individual member (None = unlimited)
-    member_name_contains  : substring filter (legacy); ignored when allowed_members set
-    allowed_members       : exact member path allowlist for this archive (manifest mode)
-    include_raw_json      : if False, omit full raw_json (slim cache mode)
-    quiet                 : suppress progress prints
+    Resume parameters (optional):
+      resume_member / resume_after_line / resume_raw_event_id
+        Skip earlier members without decoding. In the checkpoint member,
+        emit no lines with line_number <= resume_after_line. At the
+        checkpoint line, verify raw_event_id then continue.
+      start_file_id
+        Next per-archive file_id to assign (preserves original semantics).
     """
     archive_path = pathlib.Path(archive_path)
     archive_name = archive_path.name
@@ -520,10 +524,13 @@ def stream_events(
         return
 
     members_seen  = 0
-    total_events  = 0
+    total_events  = max(0, int(start_file_id) - 1)
     parse_errors  = 0
     matched_allow = set()
     remaining_allow = set(allowed_members) if allowed_members is not None else None
+    resume_active = resume_member is not None
+    resume_verified = False
+    resume_member_seen = False
 
     try:
         tf = tarfile.open(archive_path, "r:*")
@@ -549,6 +556,16 @@ def stream_events(
             is_plain    = name_lower.endswith(".json") or name_lower.endswith(".jsonl")
             if not (is_jsonl_gz or is_plain):
                 continue
+
+            # Resume: skip members before checkpoint without decoding contents.
+            if resume_active and not resume_verified:
+                if member.name != resume_member:
+                    if remaining_allow is not None:
+                        remaining_allow.discard(member.name)
+                        matched_allow.add(member.name)
+                    members_seen += 1
+                    continue
+                resume_member_seen = True
 
             # Legacy max_members (not used when exact allowlist is active)
             if allowed_members is None:
@@ -588,6 +605,51 @@ def stream_events(
                         if not stripped:
                             continue
 
+                        # Resume: hold emission until after verified checkpoint line.
+                        if resume_active and not resume_verified:
+                            if line_num < int(resume_after_line):
+                                continue
+                            if line_num > int(resume_after_line):
+                                raise ResumeVerificationError(
+                                    f"Checkpoint line {resume_after_line} missing in "
+                                    f"{archive_name}::{member.name} "
+                                    f"(source shorter or line skipped; reached line {line_num})"
+                                )
+                            # line_num == resume_after_line: verify, do not emit.
+                            try:
+                                raw = json.loads(stripped)
+                            except json.JSONDecodeError as exc:
+                                # Error records still have a stable raw_event_id.
+                                got_id = _stable_id(archive_name, member.name, line_num)
+                                if got_id != str(resume_raw_event_id):
+                                    raise ResumeVerificationError(
+                                        f"raw_event_id mismatch at checkpoint "
+                                        f"{archive_name}::{member.name}:{line_num}: "
+                                        f"saved={resume_raw_event_id!r} got={got_id!r} "
+                                        f"(json_parse_error: {exc})"
+                                    ) from exc
+                                resume_verified = True
+                                continue
+                            if not isinstance(raw, dict):
+                                raise ResumeVerificationError(
+                                    f"Checkpoint line {line_num} is not a JSON object in "
+                                    f"{archive_name}::{member.name}"
+                                )
+                            probe = normalize_event(
+                                raw, archive_name, member.name,
+                                line_num, 0, source_type,
+                                include_raw_json=False,
+                            )
+                            got_id = str(probe.get("raw_event_id", ""))
+                            if got_id != str(resume_raw_event_id):
+                                raise ResumeVerificationError(
+                                    f"raw_event_id mismatch at checkpoint "
+                                    f"{archive_name}::{member.name}:{line_num}: "
+                                    f"saved={resume_raw_event_id!r} got={got_id!r}"
+                                )
+                            resume_verified = True
+                            continue
+
                         if (max_events_per_member is not None
                                 and member_event_count >= max_events_per_member):
                             if not quiet:
@@ -600,7 +662,7 @@ def stream_events(
                                 )
                             break
 
-                        if max_events is not None and total_events >= max_events:
+                        if max_events is not None and (total_events - (start_file_id - 1)) >= max_events:
                             if not quiet:
                                 print(f"  [PARSER] max_events={max_events} reached; stopping.",
                                       file=sys.stderr)
@@ -635,9 +697,17 @@ def stream_events(
                     except Exception:
                         pass
 
+            except ResumeVerificationError:
+                raise
             except Exception as exc:
                 if not quiet:
                     print(f"  [WARN] Cannot decompress {member.name}: {exc}", file=sys.stderr)
+
+            if resume_active and resume_member_seen and not resume_verified:
+                raise ResumeVerificationError(
+                    f"Checkpoint line {resume_after_line} not reached in "
+                    f"{archive_name}::{resume_member} (source ended early)"
+                )
 
             # Early exit when every allowlisted member for this archive is done
             if remaining_allow is not None and not remaining_allow:
@@ -646,13 +716,25 @@ def stream_events(
                           f"processed for {archive_name}.", flush=True)
                 break
 
+        if resume_active and not resume_member_seen:
+            raise ResumeVerificationError(
+                f"Checkpoint member not found in archive {archive_name}: "
+                f"{resume_member}"
+            )
+        if resume_active and not resume_verified:
+            raise ResumeVerificationError(
+                f"Checkpoint not verified in archive {archive_name}: "
+                f"{resume_member}:{resume_after_line}"
+            )
+
     finally:
         tf.close()
 
     if not quiet:
         print(
             f"  [PARSER DONE] {archive_name}: "
-            f"{members_seen} members scanned, {total_events} events yielded, "
+            f"{members_seen} members scanned, "
+            f"{total_events - (start_file_id - 1)} events yielded this pass, "
             f"{parse_errors} parse errors",
             flush=True,
         )
@@ -667,14 +749,20 @@ def stream_from_archives(
     allowed_members_by_archive: Optional[Dict[str, Set[str]]] = None,
     include_raw_json: bool = True,
     quiet: bool = False,
+    resume_checkpoint: Optional[dict] = None,
 ) -> Iterator[dict]:
     """
     Stream events from multiple .tar archives.
 
     allowed_members_by_archive maps archive filename → exact member path set.
     When provided, only those members are processed (manifest mode).
+
+    resume_checkpoint (optional) keys:
+      archive_name, member_name, line_number, raw_event_id, next_file_id
+    Archives before the checkpoint archive are skipped without opening.
     """
     total = 0
+    skipping_to_resume = resume_checkpoint is not None
     for archive_path in archive_paths:
         archive_path = pathlib.Path(archive_path)
         per_archive_cap = None if max_events is None else max_events - total
@@ -688,6 +776,36 @@ def stream_from_archives(
                 if not quiet:
                     print(f"  [PARSER] no allowlisted members for {archive_path.name}; skipping.")
                 continue
+
+        if skipping_to_resume:
+            if archive_path.name != resume_checkpoint["archive_name"]:
+                if not quiet:
+                    print(
+                        f"  [PARSER] resume skip archive {archive_path.name}",
+                        flush=True,
+                    )
+                continue
+            # Checkpoint archive: resume mid-member / mid-stream.
+            for event in stream_events(
+                archive_path,
+                max_members=max_members if allowed is None else None,
+                max_events=per_archive_cap,
+                max_events_per_member=max_events_per_member,
+                member_name_contains=member_name_contains if allowed is None else None,
+                allowed_members=allowed,
+                include_raw_json=include_raw_json,
+                quiet=quiet,
+                resume_member=resume_checkpoint["member_name"],
+                resume_after_line=int(resume_checkpoint["line_number"]),
+                resume_raw_event_id=str(resume_checkpoint["raw_event_id"]),
+                start_file_id=int(resume_checkpoint.get("next_file_id", 1)),
+            ):
+                total += 1
+                yield event
+                if max_events is not None and total >= max_events:
+                    return
+            skipping_to_resume = False
+            continue
 
         for event in stream_events(
             archive_path,
@@ -703,6 +821,12 @@ def stream_from_archives(
             yield event
             if max_events is not None and total >= max_events:
                 return
+
+    if skipping_to_resume:
+        raise ResumeVerificationError(
+            f"Checkpoint archive not found in archive list: "
+            f"{resume_checkpoint['archive_name']}"
+        )
 
 
 # ── CLI smoke-test ─────────────────────────────────────────────────────────

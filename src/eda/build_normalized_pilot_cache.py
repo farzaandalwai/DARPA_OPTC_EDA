@@ -36,7 +36,20 @@ from manifest_utils import (  # type: ignore
 from optc_streaming_parser import (  # type: ignore
     SCHEMA_VERSION,
     SLIM_EVENT_COLUMNS,
+    ResumeVerificationError,
     stream_from_archives,
+)
+from cache_resume import (  # type: ignore
+    RESUME_VERSION,
+    ResumeError,
+    aggregate_preexisting_chunks,
+    atomic_write_json,
+    atomic_write_parquet_chunk,
+    atomic_write_text,
+    merge_resume_aggregates,
+    prepare_resume_context,
+    require_commit_checkpoint,
+    write_resume_state,
 )
 
 TIMESTAMP_RULE = (
@@ -133,6 +146,15 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume an interrupted cache build from finalized Parquet chunks "
+            "in --cache-dir. Mutually exclusive with --overwrite. "
+            "Incompatible with --max-events / --max-events-per-member."
+        ),
+    )
     p.add_argument("--compression", default="zstd",
                    choices=["zstd", "snappy", "gzip", "none"],
                    help="Parquet compression (default: zstd)")
@@ -154,26 +176,42 @@ def _write_chunk(
     archive_date_hint: str,
     compression: str,
 ) -> pathlib.Path:
-    """Write one Parquet chunk; returns path."""
-    df = pd.DataFrame(rows)
-    # Ensure slim schema only
-    for col in SLIM_EVENT_COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-    # Drop raw_json / error_snippet from cache (evidence goes elsewhere)
-    keep = [c for c in SLIM_EVENT_COLUMNS if c in df.columns]
-    df = df[keep]
+    """Write one Parquet chunk atomically (temp + validate + rename)."""
+    return atomic_write_parquet_chunk(
+        rows, cache_dir, chunk_idx, archive_date_hint, compression
+    )
 
-    date_token = archive_date_hint.replace("-", "") if archive_date_hint else "unknown"
-    fname = f"chunk_{chunk_idx:05d}_date_{date_token}.parquet"
-    out = cache_dir / fname
-    comp = None if compression == "none" else compression
-    df.to_parquet(out, index=False, compression=comp, engine="pyarrow")
-    return out
+
+def _validate_resume_cli(args: argparse.Namespace) -> None:
+    """Fail fast on illegal --resume combinations before touching outputs."""
+    if not args.resume:
+        return
+    if args.overwrite:
+        print(
+            "[ERROR] --resume and --overwrite are mutually exclusive.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if args.max_events is not None:
+        print(
+            "[ERROR] --resume cannot be combined with --max-events "
+            "(failing before modifying the output directory).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if args.max_events_per_member is not None:
+        print(
+            "[ERROR] --resume cannot be combined with --max-events-per-member "
+            "(failing before modifying the output directory).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def main() -> None:
     args = parse_args()
+    # Validate resume conflicts BEFORE any output-directory mutation.
+    _validate_resume_cli(args)
     validate_positive_optional_int("--max-events-per-member", args.max_events_per_member)
     validate_positive_optional_int("--max-events", args.max_events)
 
@@ -184,26 +222,90 @@ def main() -> None:
     evidence_dir = project_root / "outputs" / "evidence"
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
-    if cache_dir.exists() and any(cache_dir.glob("*.parquet")):
-        if not args.overwrite:
-            print(f"[ERROR] Cache dir already has parquet files: {cache_dir}\n"
-                  f"  Re-run with --overwrite to replace.", file=sys.stderr)
-            sys.exit(1)
-        for p in cache_dir.glob("*.parquet"):
-            p.unlink()
-        for p in cache_dir.glob("cache_*.json"):
-            p.unlink()
-        for p in cache_dir.glob("cache_*.csv"):
-            p.unlink()
-        for p in cache_dir.glob("README*.txt"):
-            p.unlink()
+    resume_ctx = None
+    preexisting_events = 0
+    preexisting_chunks = 0
+    preexisting_agg = None
+    resume_initial_checkpoint = None
+    new_events = 0
+    new_ok = 0
+    new_err = 0
+    first_new_chunk_index = 0
 
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    if args.resume:
+        if not cache_dir.exists():
+            print(f"[ERROR] --resume requires an existing cache dir: {cache_dir}",
+                  file=sys.stderr)
+            sys.exit(1)
+        # Load manifest first so checkpoint can be validated against it,
+        # but only after resume CLI conflicts are rejected (already done).
+        manifest = load_manifest(pathlib.Path(args.manifest_csv))
+        archive_paths = resolve_manifest_archives(manifest, corrected_dir)
+        try:
+            resume_ctx = prepare_resume_context(cache_dir, manifest)
+            # One vectorized pass over preexisting chunks only (footer total
+            # is authoritative). Never rescanned at completion.
+            preexisting_agg = aggregate_preexisting_chunks(
+                resume_ctx["chunks"],
+                error_example_limit=_MAX_ERROR_EXAMPLES,
+                expected_footer_total=resume_ctx["preexisting_events"],
+            )
+        except ResumeError as exc:
+            print(f"[ERROR] Resume validation failed (no files modified): {exc}",
+                  file=sys.stderr)
+            sys.exit(1)
+        preexisting_events = resume_ctx["preexisting_events"]
+        preexisting_chunks = resume_ctx["preexisting_chunks"]
+        first_new_chunk_index = resume_ctx["next_chunk_index"]
+        resume_initial_checkpoint = dict(resume_ctx["checkpoint"])
+        for name in resume_ctx.get("leftover_temps") or []:
+            print(f"[WARN] Leftover temp chunk file left in place (not deleted): {name}",
+                  flush=True)
+        print(
+            f"[INFO] Resume prepared: preexisting_chunks={preexisting_chunks}, "
+            f"preexisting_events={preexisting_events}, "
+            f"next_chunk_index={first_new_chunk_index}, "
+            f"legacy_inferred={resume_ctx['inferred_legacy']}",
+            flush=True,
+        )
+        print(
+            f"[INFO] Checkpoint: {resume_ctx['checkpoint']['archive_name']} :: "
+            f"{resume_ctx['checkpoint']['member_name']}:"
+            f"{resume_ctx['checkpoint']['line_number']} "
+            f"id={resume_ctx['checkpoint']['raw_event_id']}",
+            flush=True,
+        )
+    else:
+        if cache_dir.exists() and any(cache_dir.glob("*.parquet")):
+            if not args.overwrite:
+                print(f"[ERROR] Cache dir already has parquet files: {cache_dir}\n"
+                      f"  Re-run with --overwrite to replace, or --resume to continue.",
+                      file=sys.stderr)
+                sys.exit(1)
+            for p in cache_dir.glob("*.parquet"):
+                p.unlink()
+            for p in cache_dir.glob(".*parquet.tmp"):
+                # Fresh overwrite: remove temps from a prior failed write attempt
+                # only when explicitly overwriting a cache rebuild.
+                p.unlink()
+            for p in cache_dir.glob("cache_*.json"):
+                p.unlink()
+            for p in cache_dir.glob("cache_*.csv"):
+                p.unlink()
+            for p in cache_dir.glob("README*.txt"):
+                p.unlink()
+            rs = cache_dir / "cache_resume_state.json"
+            if rs.exists():
+                rs.unlink()
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        manifest = load_manifest(pathlib.Path(args.manifest_csv))
+        archive_paths = resolve_manifest_archives(manifest, corrected_dir)
 
     sampling_strategy = sampling_strategy_for(args.max_events, args.max_events_per_member)
     start = datetime.datetime.now(datetime.timezone.utc)
     print(f"\n{'='*60}")
-    print("Build Normalized Pilot Cache")
+    print("Build Normalized Pilot Cache" + (" [RESUME]" if args.resume else ""))
     print(f"  manifest-csv           : {args.manifest_csv}")
     print(f"  corrected-dir          : {corrected_dir}")
     print(f"  cache-dir              : {cache_dir}")
@@ -213,11 +315,9 @@ def main() -> None:
           f"{args.max_events_per_member if args.max_events_per_member is not None else 'unlimited'}")
     print(f"  sampling_strategy      : {sampling_strategy}")
     print(f"  trust-preverified      : {bool(args.trust_preverified_manifest)}")
+    print(f"  resume                 : {bool(args.resume)}")
     print(f"  compression            : {args.compression}")
     print(f"{'='*60}\n")
-
-    manifest = load_manifest(pathlib.Path(args.manifest_csv))
-    archive_paths = resolve_manifest_archives(manifest, corrected_dir)
 
     if args.trust_preverified_manifest:
         print(
@@ -256,112 +356,172 @@ def main() -> None:
         print(f"[INFO] Matched members  : {verify['matched_member_count']} "
               f"(verified_this_run)")
 
-    # Build allowlist map for parser
     allowlist = manifest.allowlist
-
-    # Map archive → date from manifest for chunk naming
     arch_date = (
         manifest.df.groupby("archive_filename")["archive_date"]
         .first().to_dict()
     )
 
     buffer: list = []
-    chunk_idx = 0
-    chunk_paths: list = []
-    total_events = 0
-    total_ok = 0
-    total_err = 0
+    chunk_idx = first_new_chunk_index
+    new_chunk_paths: list = []
     error_examples: list = []
     events_per_member: dict = {}
     current_member = None
     member_event_count = 0
     member_summaries: list = []
+    combined_events_so_far = preexisting_events
+    # Tracks the latest committed chunk checkpoint (final after resume).
+    # resume_initial_checkpoint is frozen at prepare time and never overwritten.
+    last_committed_checkpoint = (
+        dict(resume_initial_checkpoint) if resume_initial_checkpoint is not None else None
+    )
 
     def flush_member_progress(member_key: str, count: int) -> None:
         print(f"    → member done: {count:,} events from {member_key}", flush=True)
 
     def flush_chunk(date_hint: str) -> None:
-        nonlocal buffer, chunk_idx
+        nonlocal buffer, chunk_idx, combined_events_so_far, last_committed_checkpoint
         if not buffer:
             return
+        # Validate final row BEFORE any Parquet or state write. Never invent file_id.
+        ckpt = require_commit_checkpoint(buffer[-1])
+        n_buf = len(buffer)
         path = _write_chunk(buffer, cache_dir, chunk_idx, date_hint, args.compression)
-        chunk_paths.append(path)
-        print(f"  [CHUNK {chunk_idx:05d}] wrote {len(buffer):,} rows → {path.name}",
+        # Only after final Parquet name is committed, update resume state.
+        combined_events_so_far += n_buf
+        write_resume_state(
+            cache_dir,
+            last_committed_chunk_index=chunk_idx,
+            combined_events=combined_events_so_far,
+            checkpoint=ckpt,
+        )
+        last_committed_checkpoint = ckpt
+        new_chunk_paths.append(path)
+        print(f"  [CHUNK {chunk_idx:05d}] wrote {n_buf:,} rows → {path.name}",
               flush=True)
         chunk_idx += 1
         buffer = []
 
     last_date_hint = "unknown"
+    resume_kwargs = {}
+    if resume_ctx is not None:
+        ck = resume_ctx["checkpoint"]
+        resume_kwargs["resume_checkpoint"] = {
+            "archive_name": ck["archive_name"],
+            "member_name": ck["member_name"],
+            "line_number": ck["line_number"],
+            "raw_event_id": ck["raw_event_id"],
+            "next_file_id": resume_ctx["next_file_id"],
+        }
 
-    for event in stream_from_archives(
-        archive_paths,
-        max_events=args.max_events,
-        max_events_per_member=args.max_events_per_member,
-        allowed_members_by_archive=allowlist,
-        include_raw_json=False,
-        quiet=False,
-    ):
-        # Track per-member progress
-        mkey = f"{event['archive_name']}::{event['member_name']}"
-        if current_member is None:
-            current_member = mkey
-            member_event_count = 0
-        elif mkey != current_member:
+    try:
+        for event in stream_from_archives(
+            archive_paths,
+            max_events=args.max_events,
+            max_events_per_member=args.max_events_per_member,
+            allowed_members_by_archive=allowlist,
+            include_raw_json=False,
+            quiet=False,
+            **resume_kwargs,
+        ):
+            mkey = f"{event['archive_name']}::{event['member_name']}"
+            if current_member is None:
+                current_member = mkey
+                member_event_count = 0
+            elif mkey != current_member:
+                flush_member_progress(current_member, member_event_count)
+                events_per_member[current_member] = (
+                    events_per_member.get(current_member, 0) + member_event_count
+                )
+                member_summaries.append({
+                    "archive_filename": current_member.split("::", 1)[0],
+                    "member_name": current_member.split("::", 1)[1],
+                    "events_written": member_event_count,
+                })
+                current_member = mkey
+                member_event_count = 0
+
+            member_event_count += 1
+            new_events += 1
+
+            if event.get("parse_status") == "ok":
+                new_ok += 1
+            else:
+                new_err += 1
+                if len(error_examples) < _MAX_ERROR_EXAMPLES:
+                    error_examples.append({
+                        "archive_name": event.get("archive_name", ""),
+                        "member_name": event.get("member_name", ""),
+                        "line_number": event.get("line_number", ""),
+                        "raw_event_id": event.get("raw_event_id", ""),
+                        "parse_status": event.get("parse_status", ""),
+                        "parse_error": event.get("parse_error", ""),
+                        "error_snippet": event.get("error_snippet", "")[:300],
+                    })
+
+            slim = {c: event.get(c, "") for c in SLIM_EVENT_COLUMNS}
+            buffer.append(slim)
+            last_date_hint = arch_date.get(event.get("archive_name", ""), "unknown")
+            if len(buffer) >= args.chunk_size:
+                flush_chunk(str(last_date_hint))
+
+        if current_member is not None:
             flush_member_progress(current_member, member_event_count)
-            events_per_member[current_member] = member_event_count
+            events_per_member[current_member] = (
+                events_per_member.get(current_member, 0) + member_event_count
+            )
             member_summaries.append({
                 "archive_filename": current_member.split("::", 1)[0],
                 "member_name": current_member.split("::", 1)[1],
                 "events_written": member_event_count,
             })
-            current_member = mkey
-            member_event_count = 0
-
-        member_event_count += 1
-        total_events += 1
-
-        if event.get("parse_status") == "ok":
-            total_ok += 1
-        else:
-            total_err += 1
-            if len(error_examples) < _MAX_ERROR_EXAMPLES:
-                error_examples.append({
-                    "archive_name": event.get("archive_name", ""),
-                    "member_name": event.get("member_name", ""),
-                    "line_number": event.get("line_number", ""),
-                    "raw_event_id": event.get("raw_event_id", ""),
-                    "parse_status": event.get("parse_status", ""),
-                    "parse_error": event.get("parse_error", ""),
-                    "error_snippet": event.get("error_snippet", "")[:300],
-                })
-
-        # Slim row for cache
-        slim = {c: event.get(c, "") for c in SLIM_EVENT_COLUMNS}
-        buffer.append(slim)
-
-        last_date_hint = arch_date.get(event.get("archive_name", ""), "unknown")
-
-        if len(buffer) >= args.chunk_size:
-            flush_chunk(str(last_date_hint))
-
-    # Final member / chunk
-    if current_member is not None:
-        flush_member_progress(current_member, member_event_count)
-        events_per_member[current_member] = member_event_count
-        member_summaries.append({
-            "archive_filename": current_member.split("::", 1)[0],
-            "member_name": current_member.split("::", 1)[1],
-            "events_written": member_event_count,
-        })
-    flush_chunk(str(last_date_hint))
+        flush_chunk(str(last_date_hint))
+    except (ResumeVerificationError, ResumeError) as exc:
+        print(
+            f"[ERROR] Resume aborted before committing a new chunk: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     end = datetime.datetime.now(datetime.timezone.utc)
 
-    # Cache size on disk
-    cache_bytes = sum(p.stat().st_size for p in cache_dir.glob("*.parquet"))
+    # Fresh builds: keep live counters — never rescan the completed cache.
+    # Resume: merge the single preexisting pass with live new-event counters.
+    # Never rescan newly written chunks.
+    if args.resume:
+        assert preexisting_agg is not None and resume_ctx is not None
+        merged = merge_resume_aggregates(
+            preexisting_agg,
+            new_events=new_events,
+            new_events_per_member=events_per_member,
+            new_ok=new_ok,
+            new_err=new_err,
+            new_error_examples=error_examples,
+            error_example_limit=_MAX_ERROR_EXAMPLES,
+        )
+        member_summaries = merged["member_summaries"]
+        events_per_member = merged["events_per_member"]
+        total_ok = merged["events_ok"]
+        total_err = merged["parse_errors"]
+        total_events = merged["total_events"]
+        error_examples = merged["error_examples"]
+        all_chunks = list(resume_ctx["chunks"])
+        for p in new_chunk_paths:
+            idx = int(p.name.split("_")[1])
+            all_chunks.append((idx, p))
+    else:
+        total_ok = new_ok
+        total_err = new_err
+        total_events = new_events
+        all_chunks = []
+        for p in new_chunk_paths:
+            idx = int(p.name.split("_")[1])
+            all_chunks.append((idx, p))
+
+    cache_bytes = sum(p.stat().st_size for _, p in all_chunks)
     cache_mib = cache_bytes / (1024 ** 2)
 
-    # Smoke-test projection when capped
     projection = {}
     if args.max_events is not None and total_events > 0:
         avg_bytes = cache_bytes / total_events
@@ -383,11 +543,9 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-    # Members selected but produced zero events (still matched in tar)
     processed_keys = set(events_per_member.keys())
     expected_keys = manifest.all_member_keys()
     zero_event_members = sorted(expected_keys - processed_keys)
-    # If max_events cut off early, many members may be unprocessed — record that
     capped_early = args.max_events is not None and total_events >= args.max_events
 
     metadata = {
@@ -408,8 +566,8 @@ def main() -> None:
         "total_events_written": total_events,
         "events_ok": total_ok,
         "parse_errors": total_err,
-        "chunks_written": len(chunk_paths),
-        "chunk_files": [p.name for p in chunk_paths],
+        "chunks_written": len(all_chunks),
+        "chunk_files": [p.name for _, p in all_chunks],
         "cache_size_bytes": cache_bytes,
         "cache_size_mib": round(cache_mib, 2),
         "start_time_utc": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -425,19 +583,34 @@ def main() -> None:
         "schema_notes": SCHEMA_NOTES,
         "timestamp_conversion_rule": TIMESTAMP_RULE,
         "smoke_test_projection": projection,
+        "resumed": bool(args.resume),
+        "resume_mode_version": RESUME_VERSION if args.resume else None,
+        "resume_preexisting_chunks": preexisting_chunks if args.resume else 0,
+        "resume_preexisting_events": preexisting_events if args.resume else 0,
+        "resume_initial_checkpoint": resume_initial_checkpoint if args.resume else None,
+        "resume_final_checkpoint": last_committed_checkpoint if args.resume else None,
+        "resume_first_new_chunk_index": first_new_chunk_index if args.resume else None,
+        "resume_newly_written_chunks": len(new_chunk_paths) if args.resume else 0,
+        "resume_newly_written_events": new_events if args.resume else 0,
+        "resume_combined_chunks": len(all_chunks),
+        "resume_combined_events": total_events,
+        "resume_inferred_from_legacy_cache": (
+            bool(resume_ctx["inferred_legacy"]) if args.resume else False
+        ),
     }
-    (cache_dir / "cache_metadata.json").write_text(
-        json.dumps(metadata, indent=2), encoding="utf-8"
-    )
+    atomic_write_json(cache_dir / "cache_metadata.json", metadata)
 
     summary_df = pd.DataFrame(member_summaries)
     summary_path = cache_dir / "cache_build_summary.csv"
-    summary_df.to_csv(summary_path, index=False)
+    tmp_summary = cache_dir / f".cache_build_summary.{start.timestamp()}.csv.tmp"
+    summary_df.to_csv(tmp_summary, index=False)
+    tmp_summary.replace(summary_path)
 
     err_path = evidence_dir / "cache_parse_error_examples.csv"
-    pd.DataFrame(error_examples).to_csv(err_path, index=False)
+    tmp_err = evidence_dir / f".cache_parse_error_examples.{start.timestamp()}.csv.tmp"
+    pd.DataFrame(error_examples).to_csv(tmp_err, index=False)
+    tmp_err.replace(err_path)
 
-    # README
     lines = [
         "Normalized Pilot Event Cache",
         "=" * 50,
@@ -459,7 +632,7 @@ def main() -> None:
         f"Members in manifest: {manifest.member_count}",
         f"Events written: {total_events:,}",
         f"Parse errors: {total_err:,}",
-        f"Chunks: {len(chunk_paths)}",
+        f"Chunks: {len(all_chunks)}",
         f"Cache size: {cache_mib:.2f} MiB",
         f"max-events cap: {args.max_events}",
         f"max-events-per-member: {args.max_events_per_member}",
@@ -467,6 +640,21 @@ def main() -> None:
         f"sampling_limitation: {_SAMPLING_LIMITATION}",
         f"member_verification_performed: {member_verification_performed}",
         f"member_verification_mode: {member_verification_mode}",
+        f"resumed: {bool(args.resume)}",
+    ]
+    if args.resume:
+        lines += [
+            f"resume_mode_version: {RESUME_VERSION}",
+            f"resume_preexisting_chunks: {preexisting_chunks}",
+            f"resume_preexisting_events: {preexisting_events}",
+            f"resume_first_new_chunk_index: {first_new_chunk_index}",
+            f"resume_newly_written_chunks: {len(new_chunk_paths)}",
+            f"resume_newly_written_events: {new_events}",
+            f"resume_inferred_from_legacy_cache: {resume_ctx['inferred_legacy']}",
+            f"resume_initial_checkpoint: {resume_initial_checkpoint}",
+            f"resume_final_checkpoint: {last_committed_checkpoint}",
+        ]
+    lines += [
         "",
         "Timestamp rule:",
         f"  {TIMESTAMP_RULE}",
@@ -482,20 +670,26 @@ def main() -> None:
             f"  projected 1M events:   {projection['projected_cache_gib_for_1m_events']} GiB",
             f"  note: {projection['note']}",
         ]
-    (cache_dir / "README_normalized_pilot_cache.txt").write_text(
-        "\n".join(lines), encoding="utf-8"
+    atomic_write_text(
+        cache_dir / "README_normalized_pilot_cache.txt",
+        "\n".join(lines) + "\n",
     )
 
     print(f"\n{'='*60}")
-    print("CACHE BUILD COMPLETE")
+    print("CACHE BUILD COMPLETE" + (" [RESUME]" if args.resume else ""))
     print(f"  Events written              : {total_events:,} (ok={total_ok:,}, err={total_err:,})")
-    print(f"  Chunks                      : {len(chunk_paths)}")
+    print(f"  Chunks                      : {len(all_chunks)}")
     print(f"  Cache size                  : {cache_mib:.2f} MiB")
     print(f"  sampling_strategy           : {sampling_strategy}")
     print(f"  max_events_per_member       : {args.max_events_per_member}")
     print(f"  max_events_safety_cap       : {args.max_events}")
     print(f"  member_verification_performed: {member_verification_performed}")
     print(f"  member_verification_mode    : {member_verification_mode}")
+    if args.resume:
+        print(f"  resume_preexisting_chunks   : {preexisting_chunks}")
+        print(f"  resume_newly_written_chunks : {len(new_chunk_paths)}")
+        print(f"  resume_first_new_chunk_index: {first_new_chunk_index}")
+        print(f"  resume_legacy_inferred      : {resume_ctx['inferred_legacy']}")
     print(f"  Metadata                    : {cache_dir / 'cache_metadata.json'}")
     print(f"  Summary CSV                 : {summary_path}")
     print(f"  Error examples              : {err_path}")
