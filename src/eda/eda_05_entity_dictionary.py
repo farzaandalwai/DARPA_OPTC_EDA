@@ -524,9 +524,20 @@ def _scan_sql(spec: ScanSpec) -> str:
 
 
 def _record_batches(connection, spec: ScanSpec, batch_size: int):
-    """Execute one entity payload scan and return an Arrow RecordBatchReader."""
+    """Execute one payload scan and return a bounded Arrow RecordBatchReader."""
     relation = connection.execute(_scan_sql(spec))
-    return relation.to_arrow_reader(batch_size=batch_size)
+
+    modern_reader = getattr(relation, "to_arrow_reader", None)
+    if callable(modern_reader):
+        return modern_reader(batch_size=batch_size)
+
+    legacy_reader = getattr(relation, "fetch_record_batch", None)
+    if callable(legacy_reader):
+        return legacy_reader(rows_per_batch=batch_size)
+
+    raise CacheAuditError(
+        "Installed DuckDB exposes no supported streaming Arrow reader API"
+    )
 
 
 def _canonical_json(parts: list[str]) -> bytes:

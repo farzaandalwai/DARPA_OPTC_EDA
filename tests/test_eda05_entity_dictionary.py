@@ -615,6 +615,93 @@ def test_exact_source_count_distinct_member_and_observation_count(tmp_path):
     assert result[0]["source_count"] == 2
 
 
+class _FakeStreamingConnection:
+    """Returns a prebuilt fake relation for any executed SQL."""
+
+    def __init__(self, relation):
+        self.relation = relation
+
+    def execute(self, sql, *args, **kwargs):
+        return self.relation
+
+
+def test_record_batches_prefers_modern_to_arrow_reader():
+    calls = {}
+
+    class ModernRelation:
+        def to_arrow_reader(self, *, batch_size):
+            calls["modern"] = batch_size
+            return "modern-reader"
+
+        def fetch_record_batch(self, *, rows_per_batch):
+            raise AssertionError("legacy API must not be used when modern exists")
+
+    reader = eda5._record_batches(
+        _FakeStreamingConnection(ModernRelation()), eda5.SCAN_SPECS[0], 7
+    )
+    assert reader == "modern-reader"
+    assert calls == {"modern": 7}
+
+
+def test_record_batches_falls_back_to_legacy_fetch_record_batch():
+    calls = {}
+
+    class LegacyRelation:
+        def fetch_record_batch(self, *, rows_per_batch):
+            calls["legacy"] = rows_per_batch
+            return "legacy-reader"
+
+    reader = eda5._record_batches(
+        _FakeStreamingConnection(LegacyRelation()), eda5.SCAN_SPECS[0], 9
+    )
+    assert reader == "legacy-reader"
+    assert calls == {"legacy": 9}
+
+
+def test_record_batches_fails_when_no_streaming_api_exists():
+    class BareRelation:
+        pass
+
+    with pytest.raises(
+        eda5.CacheAuditError, match="no supported streaming Arrow reader"
+    ):
+        eda5._record_batches(
+            _FakeStreamingConnection(BareRelation()), eda5.SCAN_SPECS[0], 3
+        )
+
+
+def test_record_batches_real_duckdb_streams_arrow_reader(tmp_path):
+    import pyarrow as pa
+
+    rows = [
+        _event(index, timestamp=f"2019-09-16T00:0{index}:00", host=f"h{index}")
+        for index in range(5)
+    ]
+    cache = _write_cache(tmp_path, rows)
+    con, spill, owned = eda5._duck_conn(cache, memory_limit="64MB", threads=1)
+    try:
+        reader = eda5._record_batches(con, eda5.SCAN_SPECS[0], 2)
+        # Streaming contract: an Arrow RecordBatchReader, not a materialized
+        # table/DataFrame, honoring the requested batch size.
+        assert isinstance(reader, pa.RecordBatchReader)
+        batches = list(reader)
+        assert batches
+        assert all(isinstance(batch, pa.RecordBatch) for batch in batches)
+        assert all(batch.num_rows <= 2 for batch in batches)
+        assert sum(batch.num_rows for batch in batches) == 5
+    finally:
+        con.close()
+        if owned:
+            shutil.rmtree(spill, ignore_errors=True)
+    # Capability detection, never version detection or full materialization.
+    source = inspect.getsource(eda5._record_batches)
+    assert "to_arrow_reader" in source
+    assert "fetch_record_batch" in source
+    assert "duckdb.__version__" not in source
+    assert "fetchdf" not in inspect.getsource(eda5.extract_t9)
+    assert "fetchall" not in inspect.getsource(eda5.extract_t9)
+
+
 def test_actor_parent_pid_and_command_line_do_not_affect_process_id():
     first = eda5.normalize_entity(
         entity_type="process",
