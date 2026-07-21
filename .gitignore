@@ -2,6 +2,10 @@
 data/*
 !data/
 !data/README_data.md
+!data/period_maps/
+data/period_maps/*
+!data/period_maps/*.csv
+!data/period_maps/*.md
 *.tar
 *.tar.*
 *.gz
