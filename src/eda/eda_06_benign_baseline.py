@@ -54,6 +54,10 @@ DEVIATION_FORMULA = (
     "I(new_destination_count>0)+I(new_path_category_count>0)+"
     "unusual_hour_flag+semantic_distribution_distance)/6"
 )
+# Fixed F7 line color for every host-panel segment. Color encodes no
+# scientific meaning; using one blue avoids the Matplotlib color cycle
+# assigning different colors to inactive-gap segments of the same host.
+F7_LINE_COLOR = "#1f77b4"
 
 T11_COLUMNS = [
     "host_id",
@@ -1670,13 +1674,41 @@ def validate_outputs(t11, t12, t13) -> None:
                 raise CacheAuditError("T13 evidence cap/uniqueness failure")
 
 
-def create_f7(t11, t13, png_path: pathlib.Path, pdf_path: pathlib.Path) -> None:
+def _host_label_map(connection) -> dict[str, str]:
+    """Deterministic host_id -> exact T9 raw hostname for F7 panel titles."""
+    frame = _query_frame(
+        connection,
+        """
+        SELECT CAST(host_id AS VARCHAR) AS host_id,
+               CAST(raw_value AS VARCHAR) AS raw_value
+        FROM host_dim
+        ORDER BY host_id, raw_value
+        """,
+    )
+    labels: dict[str, str] = {}
+    if frame.empty:
+        return labels
+    for row in frame.itertuples(index=False):
+        host_id = str(row.host_id)
+        if host_id not in labels:
+            labels[host_id] = str(row.raw_value)
+    return labels
+
+
+def create_f7(
+    t11,
+    t13,
+    png_path: pathlib.Path,
+    pdf_path: pathlib.Path,
+    host_labels: Optional[dict[str, str]] = None,
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import pandas as pd
 
+    labels = host_labels or {}
     hosts = sorted(
         set(t11["host_id"].astype(str))
         | (set(t13["host_id"].astype(str)) if not t13.empty else set())
@@ -1713,10 +1745,12 @@ def create_f7(t11, t13, png_path: pathlib.Path, pdf_path: pathlib.Path) -> None:
                 axis.plot(
                     segment["window_start"],
                     segment["deviation_score"],
+                    color=F7_LINE_COLOR,
                     marker=".",
                     linewidth=0.8,
                 )
-        axis.set_title(host_id)
+        # Prefer the exact T9 raw hostname; fall back only if unavailable.
+        axis.set_title(labels.get(host_id) or host_id)
         axis.set_ylim(0, 1)
         axis.grid(alpha=0.25)
         axis.set_ylabel("Deviation score [0,1]")
@@ -1948,6 +1982,7 @@ def run_eda06(args: argparse.Namespace) -> dict[str, Any]:
             t13,
             staging / "F7_host_deviation_score_over_time.png",
             staging / "F7_host_deviation_score_over_time.pdf",
+            host_labels=_host_label_map(connection),
         )
 
         generated = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

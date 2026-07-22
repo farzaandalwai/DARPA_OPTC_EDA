@@ -858,6 +858,73 @@ def test_f7_created_without_zero_fill(completed_run):
     assert "reindex" not in source
     assert "fillna" not in source
     assert "groupby(segment_ids" in source
+    assert "color=F7_LINE_COLOR" in source
+
+
+def test_f7_fixed_segment_color_and_readable_host_titles(tmp_path, monkeypatch):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    host_id = "ent_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    raw_host = "SysClient0101.systemia.com"
+    t11 = pd.DataFrame({"host_id": [host_id]})
+    # Two inactive-gap segments for one host: minutes 0-1, then 5-6.
+    t13 = pd.DataFrame(
+        {
+            "window_start": [
+                "2020-01-03T00:00:00",
+                "2020-01-03T00:01:00",
+                "2020-01-03T00:05:00",
+                "2020-01-03T00:06:00",
+            ],
+            "host_id": [host_id] * 4,
+            "deviation_score": [0.2, 0.4, 0.5, 0.6],
+        }
+    )
+
+    plot_calls: list[dict] = []
+    titles: list[str] = []
+    original_plot = plt.Axes.plot
+    original_set_title = plt.Axes.set_title
+
+    def capturing_plot(self, *args, **kwargs):
+        plot_calls.append(dict(kwargs))
+        return original_plot(self, *args, **kwargs)
+
+    def capturing_set_title(self, label, *args, **kwargs):
+        titles.append(str(label))
+        return original_set_title(self, label, *args, **kwargs)
+
+    monkeypatch.setattr(plt.Axes, "plot", capturing_plot)
+    monkeypatch.setattr(plt.Axes, "set_title", capturing_set_title)
+
+    png = tmp_path / "F7.png"
+    pdf = tmp_path / "F7.pdf"
+    eda6.create_f7(
+        t11,
+        t13,
+        png,
+        pdf,
+        host_labels={host_id: raw_host},
+    )
+
+    assert len(plot_calls) == 2
+    assert {call.get("color") for call in plot_calls} == {eda6.F7_LINE_COLOR}
+    assert all(call.get("marker") == "." for call in plot_calls)
+    assert all(call.get("linewidth") == 0.8 for call in plot_calls)
+    assert titles == [raw_host]
+    assert png.stat().st_size > 0
+    assert pdf.stat().st_size > 0
+
+    plot_calls.clear()
+    titles.clear()
+    eda6.create_f7(t11, t13, tmp_path / "F7b.png", tmp_path / "F7b.pdf")
+    assert len(plot_calls) == 2
+    assert {call.get("color") for call in plot_calls} == {eda6.F7_LINE_COLOR}
+    assert titles == [host_id]
 
 
 def test_deterministic_rerun_tables(tmp_path):
