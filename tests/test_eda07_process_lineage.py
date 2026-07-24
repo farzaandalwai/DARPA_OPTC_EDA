@@ -637,9 +637,17 @@ def test_next_process_support(completed_run):
         (t14["period"] == "verified_benign") & (t14["chain_length"] == 2)
     ]
     assert (length2["next_process_support"] >= 0).all()
-    with_next = length2.loc[length2["next_process"].astype(str).str.len() > 0]
+    # Default read_csv turns empty next_process into NaN; treat those as blank.
+    next_text = length2["next_process"].fillna("").astype(str).str.strip()
+    with_next = length2.loc[next_text.ne("")]
+    without_next = length2.loc[next_text.eq("")]
     if not with_next.empty:
+        assert (with_next["next_process_support"] > 0).all()
+        assert with_next["next_process_conditional_frequency"].notna().all()
         assert with_next["next_process_conditional_frequency"].between(0, 1).all()
+    if not without_next.empty:
+        assert (without_next["next_process_support"] == 0).all()
+        assert without_next["next_process_conditional_frequency"].isna().all()
 
 
 def test_t15_evidence_and_ground_truth(completed_run):
