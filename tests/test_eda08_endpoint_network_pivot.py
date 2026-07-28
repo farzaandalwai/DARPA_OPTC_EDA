@@ -405,7 +405,10 @@ def test_direct_pivot_success(tmp_path):
     t16 = pd.read_csv(
         pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
     )
-    direct = t16.loc[t16["pivot_rule_id"] == "direct_same_event"].iloc[0]
+    direct = t16.loc[
+        (t16["pivot_rule"] == "direct_same_event")
+        & (t16["date_label"] == "2020-01-01")
+    ].iloc[0]
     assert int(direct["matched_network_events"]) == 1
     t17 = pd.read_csv(
         pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
@@ -436,7 +439,10 @@ def test_unique_temporal_pivot_success(tmp_path):
     t16 = pd.read_csv(
         pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
     )
-    strict = t16.loc[t16["pivot_rule_id"] == "host_temporal_strict"].iloc[0]
+    strict = t16.loc[
+        (t16["pivot_rule"] == "host_temporal_strict")
+        & (t16["date_label"] == "2020-01-01")
+    ].iloc[0]
     assert int(strict["matched_network_events"]) == 1
     t17 = pd.read_csv(
         pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
@@ -474,7 +480,10 @@ def test_ambiguous_temporal_pivot_rejection(tmp_path):
     t16 = pd.read_csv(
         pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
     )
-    strict = t16.loc[t16["pivot_rule_id"] == "host_temporal_strict"].iloc[0]
+    strict = t16.loc[
+        (t16["pivot_rule"] == "host_temporal_strict")
+        & (t16["date_label"] == "2020-01-01")
+    ].iloc[0]
     assert int(strict["ambiguous_match_count"]) == 1
     assert int(strict["matched_network_events"]) == 0
     t17 = pd.read_csv(
@@ -505,10 +514,19 @@ def test_unmatched_row_accounting(tmp_path):
         "host_temporal_strict",
         "host_temporal_relaxed",
     ):
-        row = t16.loc[t16["pivot_rule_id"] == rule_id].iloc[0]
+        row = t16.loc[
+            (t16["pivot_rule"] == rule_id) & (t16["date_label"] == "2020-01-01")
+        ].iloc[0]
         assert int(row["endpoint_flow_events"]) == 1
         assert int(row["matched_network_events"]) == 0
         assert int(row["unmatched_count"]) == 1
+    unmatched = t16.loc[
+        (t16["pivot_rule"] == "unmatched") & (t16["date_label"] == "2020-01-01")
+    ].iloc[0]
+    assert int(unmatched["endpoint_flow_events"]) == 1
+    assert int(unmatched["matched_network_events"]) == 0
+    assert int(unmatched["ambiguous_match_count"]) == 0
+    assert int(unmatched["unmatched_count"]) == 1
     t17 = pd.read_csv(
         pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
     )
@@ -528,6 +546,309 @@ def test_unmatched_row_accounting(tmp_path):
 )
 def test_destination_structural_categorization(dest, expected):
     assert eda8.destination_structural_category(dest) == expected
+
+
+def test_t16_grouped_by_date_label_and_host_id(completed_run):
+    _, _, _, output = completed_run
+    t16 = pd.read_csv(output / "T16_endpoint_network_pivot_success.csv")
+    assert {"date_label", "host_id", "pivot_rule"}.issubset(t16.columns)
+    assert t16["date_label"].notna().all()
+    assert t16["host_id"].notna().all()
+    assert len(t16) >= len(eda8.PIVOT_RULE_IDS)
+
+
+def test_missing_host_flow_rows_remain_in_t16_denominator(tmp_path):
+    row = _flow_event(
+        0,
+        timestamp="2020-01-01T00:00:00",
+        archive_date="2020-01-01",
+        dest="10.0.0.1",
+        process="C:\\Windows\\orphan.exe",
+    )
+    row["host_raw"] = ""
+    fixture = _fixture(tmp_path, [row])
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t16 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
+    )
+    host_rows = t16.loc[t16["host_id"] == eda8.MISSING_HOST_SENTINEL]
+    assert not host_rows.empty
+    assert int(host_rows.iloc[0]["endpoint_flow_events"]) >= 1
+
+
+def test_missing_destination_flow_rows_remain_in_t16_denominator(tmp_path):
+    row = _flow_event(
+        0,
+        timestamp="2020-01-01T00:00:00",
+        archive_date="2020-01-01",
+        dest="",
+        process="C:\\Windows\\nodest.exe",
+    )
+    fixture = _fixture(tmp_path, [row])
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t16 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
+    )
+    assert int(t16.iloc[0]["endpoint_flow_events"]) == 1
+    unmatched = t16.loc[t16["pivot_rule"] == "unmatched"].iloc[0]
+    assert int(unmatched["matched_network_events"]) == 0
+    assert int(unmatched["unmatched_count"]) == 1
+    assert int(unmatched["endpoint_flow_events"]) == 1
+
+
+def test_direct_cascade_priority_over_pid(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\pid.exe",
+            pid="7000",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.7",
+            process="C:\\Windows\\direct.exe",
+            pid="7000",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t17 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
+    )
+    assert "direct.exe" in t17.iloc[0]["process_name"]
+
+
+def test_pid_mapping_accepts_unique_process_identity(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\pidmatch.exe",
+            pid="8000",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.8",
+            pid="8000",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t16 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
+    )
+    pid_row = t16.loc[t16["pivot_rule"] == "host_process_pid"].iloc[0]
+    assert int(pid_row["matched_network_events"]) == 1
+
+
+def test_pid_reuse_ambiguity_rejection(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\a.exe",
+            pid="9000",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\b.exe",
+            pid="9000",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-01T00:00:02",
+            archive_date="2020-01-01",
+            dest="10.0.0.9",
+            pid="9000",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t16 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
+    )
+    pid_row = t16.loc[t16["pivot_rule"] == "host_process_pid"].iloc[0]
+    assert int(pid_row["ambiguous_match_count"]) == 1
+    assert int(pid_row["matched_network_events"]) == 0
+
+
+def test_relaxed_temporal_unique_match(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\relaxed.exe",
+            pid="4100",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:12",
+            archive_date="2020-01-01",
+            dest="10.0.0.12",
+            pid="",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t16 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
+    )
+    relaxed = t16.loc[t16["pivot_rule"] == "host_temporal_relaxed"].iloc[0]
+    assert int(relaxed["matched_network_events"]) == 1
+
+
+def test_duplicate_raw_event_id_values_do_not_collapse(tmp_path):
+    rows = [
+        _flow_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.21",
+            process="C:\\Windows\\dup.exe",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.22",
+            process="C:\\Windows\\dup.exe",
+        ),
+    ]
+    rows[1]["raw_event_id"] = "dup-id"
+    rows[0]["raw_event_id"] = "dup-id"
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t16 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
+    )
+    direct = t16.loc[t16["pivot_rule"] == "direct_same_event"].iloc[0]
+    assert int(direct["matched_network_events"]) == 2
+
+
+def test_missing_raw_event_id_values_receive_distinct_locators(tmp_path):
+    rows = [
+        _flow_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.31",
+            process="C:\\Windows\\noid.exe",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.32",
+            process="C:\\Windows\\noid.exe",
+        ),
+    ]
+    rows[0]["raw_event_id"] = ""
+    rows[1]["raw_event_id"] = ""
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t17 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
+    )
+    assert int(t17["connection_count"].sum()) == 2
+    assert len(t17) == 2
+
+
+def test_f9_includes_zero_novelty_evaluation_host_minutes(tmp_path):
+    rows = [
+        _flow_event(
+            0,
+            timestamp="2020-01-03T00:00:00",
+            archive_date="2020-01-03",
+            dest="10.0.0.10",
+            process="C:\\Eval\\known.exe",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-03T00:01:00",
+            archive_date="2020-01-03",
+            dest="10.0.0.10",
+            process="C:\\Eval\\known.exe",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.10",
+            process="C:\\Benign\\known.exe",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    metadata = eda8.run_eda08(args)
+    assert metadata["f9_host_minute_count"] == 2
+
+
+def test_f10_counts_process_novelty_windows_not_destination_pairs(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-03T00:00:00",
+            archive_date="2020-01-03",
+            image="C:\\Eval\\novel.exe",
+            pid="3300",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-03T00:00:05",
+            archive_date="2020-01-03",
+            dest="203.0.113.10",
+            pid="3300",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-03T00:00:10",
+            archive_date="2020-01-03",
+            dest="203.0.113.11",
+            pid="3300",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    metadata = eda8.run_eda08(args)
+    counts = metadata["f10_cumulative_counts"]
+    assert int(counts["5"]) <= int(counts["15"]) <= int(counts["60"])
+    assert int(counts["60"]) == 1
+
+
+def test_user_supplied_spill_directory_is_not_deleted(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    spill = tmp_path / "user_spill"
+    spill.mkdir()
+    marker = spill / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(eda8, "_looks_like_drive", lambda _path: False)
+    args = _args(
+        tmp_path,
+        fixture,
+        duckdb_temp_dir=str(spill),
+        output_dir=str(tmp_path / "spill_out"),
+    )
+    eda8.run_eda08(args)
+    assert marker.exists()
 
 
 def test_f9_and_f10_data_preparation(completed_run):
@@ -561,7 +882,7 @@ def test_deterministic_evidence_ordering(tmp_path):
     t17 = pd.read_csv(
         pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
     )
-    assert json.loads(t17.iloc[0]["raw_event_ids"]) == ["e001", "e000"]
+    assert json.loads(t17.iloc[0]["raw_event_ids"]) == ["e000", "e001"]
 
 
 def test_atomic_cleanup_on_failure(tmp_path, monkeypatch):
@@ -639,9 +960,19 @@ def _query_frame_sql_literals(source: str) -> list[str]:
     return literals
 
 
-def _sql_fetches_wholesale_events(sql: str) -> bool:
+def _sql_fetches_row_level_forbidden_table(sql: str) -> bool:
     normalized = " ".join(str(sql).split()).lower()
-    if " from events" not in normalized and " from events\n" not in normalized:
+    forbidden_tables = (
+        "events",
+        "network_scan",
+        "flow_events",
+        "flow_inventory",
+        "process_events",
+        "process_inventory",
+        "linked_flows",
+        "pivot_assignments",
+    )
+    if not any(f" from {table}" in normalized for table in forbidden_tables):
         return False
     if re.search(r"\bgroup\s+by\b", normalized):
         return False
@@ -649,24 +980,42 @@ def _sql_fetches_wholesale_events(sql: str) -> bool:
         return False
     if "create temp table" in normalized or "create or replace temp table" in normalized:
         return False
+    if " count(*) " in f" {normalized} ":
+        return False
     return True
 
 
-def test_no_wholesale_events_pandas_fetch():
+def test_no_row_level_forbidden_table_pandas_fetch():
     source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
     literals = _query_frame_sql_literals(source)
-    offenders = [sql for sql in literals if _sql_fetches_wholesale_events(sql)]
+    offenders = [
+        sql for sql in literals if _sql_fetches_row_level_forbidden_table(sql)
+    ]
     assert offenders == []
 
     forbidden = '''
 _query_frame(
     connection,
-    """SELECT * FROM events""",
+    """SELECT * FROM linked_flows""",
 )
 '''
     forbidden_literals = _query_frame_sql_literals(forbidden)
-    assert forbidden_literals == ["SELECT * FROM events"]
-    assert _sql_fetches_wholesale_events(forbidden_literals[0])
+    assert forbidden_literals == ["SELECT * FROM linked_flows"]
+    assert _sql_fetches_row_level_forbidden_table(forbidden_literals[0])
+
+
+def test_t17_aggregation_occurs_in_duckdb():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "CREATE TEMP TABLE t17_behavior_counts" in source
+    assert "CREATE TEMP TABLE t17_bounded_evidence" in source
+    assert "list_slice(list(all evidence" not in source.lower()
+
+
+def test_no_wholesale_events_pandas_fetch():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    literals = _query_frame_sql_literals(source)
+    offenders = [sql for sql in literals if _sql_fetches_row_level_forbidden_table(sql)]
+    assert offenders == []
 
 
 def test_no_deprecation_warnings_in_module(tmp_path):
@@ -684,3 +1033,577 @@ def test_readme_mentions_non_maliciousness(completed_run):
     assert "EDA 10" in readme
     assert metadata.get("code_commit")
     assert metadata.get("duckdb_temp_dir_policy") == "owned_local_tempfile"
+    assert metadata.get("count_semantics")
+    assert metadata.get("cache_reconciliation_scan_count") == 1
+
+
+def test_f9_figure_presentation_wording():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def create_f9(")
+    end = source.index("\ndef create_f10(")
+    body = source[start:end].lower()
+    assert "1-minute windows" in body
+    assert "ground-truth intervals not overlaid" in body
+    assert "eda 10" in body
+
+
+def test_f10_figure_presentation_wording():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def create_f10(")
+    end = source.index("\ndef validate_outputs(")
+    body = source[start:end].lower()
+    assert "1-minute process-novelty windows" in body
+    assert "5/15/60-minute lags" in body
+    assert "ground-truth intervals not overlaid" in body
+    assert "eda 10" in body
+
+
+def test_execution_log_contains_all_seven_stages(completed_run):
+    _, _, _, output = completed_run
+    log = (output / "eda08_execution.log").read_text(encoding="utf-8")
+    for stage in range(1, 8):
+        assert f"[STAGE {stage}/7]" in log
+    assert "published deliverables" not in log.lower()
+    assert "staging validated and ready for atomic publication" in log
+
+
+def test_pid_ambiguity_cannot_fall_through_to_temporal(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\a.exe",
+            pid="9100",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\b.exe",
+            pid="9100",
+        ),
+        _process_event(
+            2,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\temporal.exe",
+            pid="9101",
+        ),
+        _flow_event(
+            3,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.40",
+            pid="9100",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t16 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
+    )
+    strict = t16.loc[t16["pivot_rule"] == "host_temporal_strict"].iloc[0]
+    relaxed = t16.loc[t16["pivot_rule"] == "host_temporal_relaxed"].iloc[0]
+    assert int(strict["matched_network_events"]) == 0
+    assert int(relaxed["matched_network_events"]) == 0
+
+
+def test_strict_ambiguity_cannot_fall_through_to_relaxed(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\a.exe",
+            pid="9201",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\b.exe",
+            pid="9202",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.41",
+            pid="",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    t16 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
+    )
+    strict = t16.loc[t16["pivot_rule"] == "host_temporal_strict"].iloc[0]
+    relaxed = t16.loc[t16["pivot_rule"] == "host_temporal_relaxed"].iloc[0]
+    assert int(strict["ambiguous_match_count"]) == 1
+    assert int(relaxed["matched_network_events"]) == 0
+
+
+def test_no_temporal_candidate_row_expansion_in_source():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "CREATE TEMP TABLE process_time_bounds" in source
+    assert "CREATE TEMP TABLE temporal_window_candidates" not in source
+    assert "proc_ord BETWEEN" not in source
+    assert "ASOF LEFT JOIN process_time_bounds" in source
+    assert not re.search(
+        r"flow_inventory[\s\S]{0,400}process_inventory[\s\S]{0,200}ABS\s*\(\s*date_diff",
+        source,
+        flags=re.IGNORECASE,
+    )
+
+
+def test_temporal_candidate_logic_computed_once():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert source.count("CREATE TEMP TABLE temporal_rule_status AS") == 1
+    assert "temporal_rule_status_counts" in source
+    assert "strict_upper_ord - sl.strict_lower_ord + 1" in source
+
+
+def _run_temporal_fixture(tmp_path, rows: list[dict]) -> pd.DataFrame:
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    eda8.run_eda08(args)
+    return pd.read_csv(
+        pathlib.Path(args.output_dir) / "T16_endpoint_network_pivot_success.csv"
+    )
+
+
+def _temporal_row(t16: pd.DataFrame, rule: str) -> pd.Series:
+    return t16.loc[
+        (t16["pivot_rule"] == rule) & (t16["date_label"] == "2020-01-01")
+    ].iloc[0]
+
+
+def test_temporal_zero_candidates(tmp_path):
+    rows = [
+        _flow_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.81",
+            pid="",
+        )
+    ]
+    t16 = _run_temporal_fixture(tmp_path, rows)
+    assert int(_temporal_row(t16, "host_temporal_strict")["matched_network_events"]) == 0
+    assert int(_temporal_row(t16, "host_temporal_relaxed")["matched_network_events"]) == 0
+
+
+def test_temporal_one_strict_candidate(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\only.exe",
+            pid="9301",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.82",
+            pid="",
+        ),
+    ]
+    t16 = _run_temporal_fixture(tmp_path, rows)
+    assert int(_temporal_row(t16, "host_temporal_strict")["matched_network_events"]) == 1
+
+
+def test_temporal_multiple_strict_candidates(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\a.exe",
+            pid="9401",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\b.exe",
+            pid="9402",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.83",
+            pid="",
+        ),
+    ]
+    t16 = _run_temporal_fixture(tmp_path, rows)
+    assert int(_temporal_row(t16, "host_temporal_strict")["ambiguous_match_count"]) == 1
+    assert int(_temporal_row(t16, "host_temporal_strict")["matched_network_events"]) == 0
+
+
+def test_temporal_one_relaxed_candidate(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\relaxed-only.exe",
+            pid="9501",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:12",
+            archive_date="2020-01-01",
+            dest="10.0.0.84",
+            pid="",
+        ),
+    ]
+    t16 = _run_temporal_fixture(tmp_path, rows)
+    assert int(_temporal_row(t16, "host_temporal_strict")["matched_network_events"]) == 0
+    assert int(_temporal_row(t16, "host_temporal_relaxed")["matched_network_events"]) == 1
+
+
+def test_temporal_multiple_relaxed_candidates(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\r1.exe",
+            pid="9601",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:10",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\r2.exe",
+            pid="9602",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-01T00:00:12",
+            archive_date="2020-01-01",
+            dest="10.0.0.85",
+            pid="",
+        ),
+    ]
+    t16 = _run_temporal_fixture(tmp_path, rows)
+    assert int(_temporal_row(t16, "host_temporal_strict")["matched_network_events"]) == 0
+    assert int(_temporal_row(t16, "host_temporal_relaxed")["ambiguous_match_count"]) == 1
+    assert int(_temporal_row(t16, "host_temporal_relaxed")["matched_network_events"]) == 0
+
+
+def test_temporal_duplicate_timestamp_at_lower_boundary_is_ambiguous(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\low1.exe",
+            pid="9701",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\low2.exe",
+            pid="9702",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.86",
+            pid="",
+        ),
+    ]
+    t16 = _run_temporal_fixture(tmp_path, rows)
+    assert int(_temporal_row(t16, "host_temporal_strict")["ambiguous_match_count"]) == 1
+
+
+def test_temporal_duplicate_timestamp_at_upper_boundary_is_ambiguous(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\high1.exe",
+            pid="9801",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\high2.exe",
+            pid="9802",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.87",
+            pid="",
+        ),
+    ]
+    t16 = _run_temporal_fixture(tmp_path, rows)
+    assert int(_temporal_row(t16, "host_temporal_strict")["ambiguous_match_count"]) == 1
+
+
+def test_pid_same_host_date_maps_successfully(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\dated.exe",
+            pid="9901",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.88",
+            pid="9901",
+        ),
+    ]
+    t16 = _run_temporal_fixture(tmp_path, rows)
+    assert int(_temporal_row(t16, "host_process_pid")["matched_network_events"]) == 1
+
+
+def test_pid_on_other_archive_date_does_not_map(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-02T00:00:00",
+            archive_date="2020-01-02",
+            image="C:\\Windows\\otherday.exe",
+            pid="9902",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.89",
+            pid="9902",
+        ),
+    ]
+    t16 = _run_temporal_fixture(tmp_path, rows)
+    assert int(_temporal_row(t16, "host_process_pid")["matched_network_events"]) == 0
+
+
+def test_f10_counts_one_host_window_for_two_novel_process_names(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-03T00:00:05",
+            archive_date="2020-01-03",
+            image="C:\\Eval\\novel-a.exe",
+            pid="3401",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-03T00:00:20",
+            archive_date="2020-01-03",
+            image="C:\\Eval\\novel-b.exe",
+            pid="3402",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-03T00:00:25",
+            archive_date="2020-01-03",
+            dest="203.0.113.30",
+            pid="3401",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    metadata = eda8.run_eda08(args)
+    assert int(metadata["f10_cumulative_counts"]["60"]) == 1
+
+
+def test_t17_evidence_ordering_uses_earliest_event_locator(tmp_path):
+    rows = [
+        _flow_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.90",
+            process="C:\\Windows\\loc.exe",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.90",
+            process="C:\\Windows\\loc.exe",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-01T00:00:02",
+            archive_date="2020-01-01",
+            dest="10.0.0.90",
+            process="C:\\Windows\\loc.exe",
+        ),
+    ]
+    rows[0]["raw_event_id"] = "shared"
+    rows[0]["member_name"] = "z.json.gz"
+    rows[0]["line_number"] = 99
+    rows[1]["raw_event_id"] = "shared"
+    rows[1]["member_name"] = "a.json.gz"
+    rows[1]["line_number"] = 1
+    rows[2]["raw_event_id"] = "later"
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture, evidence_cap=5)
+    eda8.run_eda08(args)
+    t17 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
+    )
+    assert json.loads(t17.iloc[0]["raw_event_ids"]) == ["shared", "later"]
+
+
+def test_no_many_to_many_temporal_range_join_in_source():
+    test_no_temporal_candidate_row_expansion_in_source()
+
+
+def test_t16_row_arithmetic_reconciliation(completed_run):
+    _, _, _, output = completed_run
+    t16 = pd.read_csv(output / "T16_endpoint_network_pivot_success.csv")
+    totals = (
+        t16["matched_network_events"]
+        + t16["ambiguous_match_count"]
+        + t16["unmatched_count"]
+    )
+    assert (totals == t16["endpoint_flow_events"]).all()
+
+
+def test_event_locator_collision_failure(tmp_path):
+    rows = [
+        _flow_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.50",
+            process="C:\\Windows\\collision.exe",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.51",
+            process="C:\\Windows\\collision.exe",
+        ),
+    ]
+    rows[1]["archive_name"] = rows[0]["archive_name"]
+    rows[1]["member_name"] = rows[0]["member_name"]
+    rows[1]["line_number"] = rows[0]["line_number"]
+    rows[1]["raw_event_id"] = rows[0]["raw_event_id"]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    with pytest.raises(eda8.CacheAuditError, match="event_locator collision"):
+        eda8.run_eda08(args)
+
+
+def test_t17_raw_event_ids_unique_and_bounded(tmp_path):
+    rows = []
+    for index in range(25):
+        rows.append(
+            _flow_event(
+                index,
+                timestamp=f"2020-01-01T00:00:{index:02d}",
+                archive_date="2020-01-01",
+                dest="10.0.0.60",
+                process="C:\\Windows\\many.exe",
+            )
+        )
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture, evidence_cap=5)
+    eda8.run_eda08(args)
+    t17 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
+    )
+    evidence = json.loads(t17.iloc[0]["raw_event_ids"])
+    assert len(evidence) == 5
+    assert len(evidence) == len(set(evidence))
+
+
+def test_f9_includes_eligible_unmatched_flow_rows(tmp_path):
+    rows = [
+        _flow_event(
+            0,
+            timestamp="2020-01-03T00:00:00",
+            archive_date="2020-01-03",
+            dest="10.0.0.70",
+            pid="",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.70",
+            process="C:\\Benign\\known.exe",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    metadata = eda8.run_eda08(args)
+    assert metadata["f9_host_minute_count"] == 1
+
+
+def test_f10_exact_five_minute_boundary(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-03T00:00:00",
+            archive_date="2020-01-03",
+            image="C:\\Eval\\novel.exe",
+            pid="4400",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-03T00:05:00",
+            archive_date="2020-01-03",
+            dest="203.0.113.20",
+            pid="4400",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    metadata = eda8.run_eda08(args)
+    assert int(metadata["f10_cumulative_counts"]["5"]) == 1
+
+
+def test_f10_five_minutes_plus_one_microsecond_rejected(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-03T00:00:00",
+            archive_date="2020-01-03",
+            image="C:\\Eval\\novel.exe",
+            pid="4500",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-03T00:05:00.000001",
+            archive_date="2020-01-03",
+            dest="203.0.113.21",
+            pid="4500",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture)
+    metadata = eda8.run_eda08(args)
+    assert int(metadata["f10_cumulative_counts"]["5"]) == 0
+    assert int(metadata["f10_cumulative_counts"]["15"]) == 1
+
+
+def test_f10_destination_lag_join_bounded_to_sixty_minutes():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "INTERVAL '60 minutes'" in source
+    assert "dest_novelty_events" in source
+    assert "process_inventory" in source
+    assert "flow_inventory" in source
