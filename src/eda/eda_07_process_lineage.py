@@ -599,6 +599,7 @@ def _duck_conn(
             temp_dir=str(spill),
             threads=threads,
         )
+        connection.execute("SET preserve_insertion_order = false")
         cache_glob = str(cache_dir / "*.parquet")
         connection.execute(
             "CREATE VIEW events AS SELECT * FROM read_parquet("
