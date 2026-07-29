@@ -300,6 +300,7 @@ def _args(root: pathlib.Path, fixture: dict, **overrides) -> argparse.Namespace:
         "duckdb_memory_limit": "1GB",
         "duckdb_temp_dir": None,
         "duckdb_threads": 2,
+        "cascade_probe_only": False,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -970,7 +971,9 @@ def _sql_fetches_row_level_forbidden_table(sql: str) -> bool:
         "process_events",
         "process_inventory",
         "linked_flows",
+        "cascade_result",
         "pivot_assignments",
+        "pivot_stage_flows",
     )
     if not any(f" from {table}" in normalized for table in forbidden_tables):
         return False
@@ -996,11 +999,11 @@ def test_no_row_level_forbidden_table_pandas_fetch():
     forbidden = '''
 _query_frame(
     connection,
-    """SELECT * FROM linked_flows""",
+    """SELECT * FROM cascade_result""",
 )
 '''
     forbidden_literals = _query_frame_sql_literals(forbidden)
-    assert forbidden_literals == ["SELECT * FROM linked_flows"]
+    assert forbidden_literals == ["SELECT * FROM cascade_result"]
     assert _sql_fetches_row_level_forbidden_table(forbidden_literals[0])
 
 
@@ -1035,6 +1038,8 @@ def test_readme_mentions_non_maliciousness(completed_run):
     assert metadata.get("duckdb_temp_dir_policy") == "owned_local_tempfile"
     assert metadata.get("count_semantics")
     assert metadata.get("cache_reconciliation_scan_count") == 1
+    assert metadata.get("payload_flow_scan_count") == 1
+    assert metadata.get("payload_process_scan_count") == 1
 
 
 def test_f9_figure_presentation_wording():
@@ -1161,9 +1166,80 @@ def test_no_temporal_candidate_row_expansion_in_source():
 
 def test_temporal_candidate_logic_computed_once():
     source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    assert source.count("CREATE TEMP TABLE temporal_rule_status AS") == 1
-    assert "temporal_rule_status_counts" in source
+    assert source.count("CREATE TEMP TABLE cascade_temporal AS") == 1
+    assert "ASOF LEFT JOIN process_time_bounds" in source
     assert "strict_upper_ord - sl.strict_lower_ord + 1" in source
+    assert "CREATE TEMP TABLE temporal_strict_lo" not in source
+    assert "CREATE TEMP TABLE temporal_strict_hi" not in source
+    assert "CREATE TEMP TABLE temporal_relaxed_lo" not in source
+    assert "CREATE TEMP TABLE temporal_relaxed_hi" not in source
+
+
+def test_no_network_scan_or_linked_flows_table():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "CREATE TEMP TABLE network_scan" not in source
+    assert "CREATE TEMP TABLE linked_flows" not in source
+    assert "CREATE TEMP VIEW linked_flows" in source
+    assert "CREATE TEMP TABLE cascade_direct" not in source
+    assert "NOT IN (SELECT" not in source
+    assert "SELECT f.*" not in source
+
+
+def test_cascade_uses_numeric_flow_id():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "ROW_NUMBER() OVER ()::BIGINT AS flow_id" in source
+    assert "CREATE TEMP TABLE cascade_result AS" in source
+    assert "c.flow_id = f.flow_id" in source or "pm.flow_id = f.flow_id" in source
+    # Cascade intermediates must not join on event_locator.
+    assert "JOIN cascade_pid_match" in source
+    assert "ON pm.event_locator" not in source
+    assert "ON pa.event_locator" not in source
+    assert "ON ts.event_locator" not in source
+
+
+def test_cascade_result_is_narrow():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("CREATE TEMP TABLE cascade_result AS")
+    end = source.index("Drop intermediate PID/temporal tables")
+    body = source[start:end]
+    assert "status_code" in body
+    assert "chosen_process_locator" in body
+    assert "archive_name" not in body
+    assert "member_name" not in body
+    assert "raw_event_id" not in body
+    assert "destination_value" not in body
+
+
+def test_cascade_probe_only_creates_no_output_directory(tmp_path):
+    fixture = _fixture(tmp_path)
+    out = tmp_path / "probe_out"
+    args = _args(tmp_path, fixture, output_dir=str(out), cascade_probe_only=True)
+    # Bypass Namespace default: _args may not know the flag.
+    args.cascade_probe_only = True
+    metadata = eda8.run_eda08(args)
+    assert metadata["cascade_probe_only"] is True
+    assert not out.exists()
+    assert (
+        metadata["direct_count"]
+        + metadata["pid_matched"]
+        + metadata["pid_ambiguous"]
+        + metadata["strict_matched"]
+        + metadata["strict_ambiguous"]
+        + metadata["relaxed_matched"]
+        + metadata["relaxed_ambiguous"]
+        + metadata["unmatched_plain"]
+        == metadata["flow_total"]
+    )
+
+
+def test_cascade_row_reconciliation(completed_run):
+    _, _, metadata, _ = completed_run
+    assert metadata["payload_flow_scan_count"] == 1
+    assert metadata["payload_process_scan_count"] == 1
+    assert metadata["cache_reconciliation_scan_count"] == 1
+    # Full-run metadata still exposes linked/unmatched totals.
+    assert metadata["unmatched_count"] >= 0
+    assert metadata["linked_flow_count"] >= 0
 
 
 def _run_temporal_fixture(tmp_path, rows: list[dict]) -> pd.DataFrame:

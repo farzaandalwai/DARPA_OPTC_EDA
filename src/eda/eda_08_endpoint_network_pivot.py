@@ -40,8 +40,19 @@ WINDOW_SECONDS = 60
 STRICT_TOLERANCE_SECONDS = 1
 RELAXED_TOLERANCE_SECONDS = 15
 DEFAULT_EVIDENCE_CAP = 20
-PAYLOAD_SCAN_COUNT = 1
+PAYLOAD_FLOW_SCAN_COUNT = 1
+PAYLOAD_PROCESS_SCAN_COUNT = 1
 CACHE_RECONCILIATION_SCAN_COUNT = 1
+
+# Compact cascade status codes (internal; not published schemas).
+STATUS_UNMATCHED = 0
+STATUS_DIRECT = 1
+STATUS_PID_MATCH = 2
+STATUS_PID_AMBIG = 3
+STATUS_STRICT_MATCH = 4
+STATUS_STRICT_AMBIG = 5
+STATUS_RELAXED_MATCH = 6
+STATUS_RELAXED_AMBIG = 7
 T16_COUNT_SEMANTICS = (
     "For each date_label, host_id, and pivot_rule, endpoint_flow_events counts "
     "FLOW rows entering that cascade stage; matched_network_events counts rows "
@@ -188,6 +199,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--duckdb-memory-limit", default="4GB")
     parser.add_argument("--duckdb-temp-dir", default=None)
     parser.add_argument("--duckdb-threads", type=int, default=2)
+    parser.add_argument(
+        "--cascade-probe-only",
+        action="store_true",
+        help=(
+            "Validate inventories and pivot cascade only; print reconciliation "
+            "counts and exit without building T16/T17/F9/F10 or publishing."
+        ),
+    )
     return parser
 
 
@@ -285,7 +304,9 @@ def validate_run_config(args: argparse.Namespace) -> dict[str, Any]:
         spill = eda5._validate_duckdb_temp_dir(args.duckdb_temp_dir)
         if _looks_like_drive(spill):
             raise CacheAuditError("Google Drive spill paths are refused")
-    _validate_output_dir(output_dir, cache_dir)
+    cascade_probe_only = bool(getattr(args, "cascade_probe_only", False))
+    if not cascade_probe_only:
+        _validate_output_dir(output_dir, cache_dir)
     cache_metadata = eda5._load_cache_metadata(cache_dir)
     policy = load_eda8_period_policy(period_map)
     manifest = eda5._manifest_metadata(manifest_path)
@@ -438,19 +459,39 @@ def _query_frame(connection, sql: str):
     return connection.execute(sql).fetchdf()
 
 
-def _create_network_scan(connection) -> None:
-    """Single bounded payload scan for FLOW and PROCESS events."""
-    locator = EVENT_LOCATOR_EXPR
+def _create_cache_period_counts(connection) -> None:
+    """Narrow cache-wide period reconciliation scan (timestamp only)."""
     connection.execute(
         f"""
-        CREATE TEMP TABLE network_scan AS
+        CREATE TEMP TABLE cache_period_counts AS
+        WITH projected AS (
+            SELECT TRY_CAST(timestamp_parsed AS TIMESTAMP) AS event_time
+            FROM events
+            WHERE TRY_CAST(timestamp_parsed AS TIMESTAMP) IS NOT NULL
+        )
+        SELECT
+            COALESCE(pi.period_role, 'unassigned') AS period_role,
+            COUNT(*)::BIGINT AS event_count
+        FROM projected e
+        {_period_join("e")}
+        GROUP BY 1
+        """
+    )
+
+
+def _create_flow_inventory(connection) -> None:
+    """FLOW payload scan into a single inventory with numeric flow_id."""
+    locator = EVENT_LOCATOR_EXPR
+    sentinel = MISSING_HOST_SENTINEL
+    connection.execute(
+        f"""
+        CREATE TEMP TABLE flow_inventory AS
         WITH projected AS (
             SELECT
                 TRY_CAST(timestamp_parsed AS TIMESTAMP) AS event_time,
                 date_trunc('minute', TRY_CAST(timestamp_parsed AS TIMESTAMP))
                     AS window_start,
                 CAST(host_raw AS VARCHAR) AS host_raw,
-                UPPER(TRIM(CAST(object_raw AS VARCHAR))) AS object_type,
                 COALESCE(
                     NULLIF(CAST(image_path_raw AS VARCHAR), ''),
                     NULLIF(CAST(process_raw AS VARCHAR), ''),
@@ -471,7 +512,88 @@ def _create_network_scan(connection) -> None:
                 {locator} AS event_locator
             FROM events
             WHERE TRY_CAST(timestamp_parsed AS TIMESTAMP) IS NOT NULL
-              AND UPPER(TRIM(CAST(object_raw AS VARCHAR))) IN ('FLOW', 'PROCESS')
+              AND UPPER(TRIM(CAST(object_raw AS VARCHAR))) = 'FLOW'
+        ),
+        enriched AS (
+            SELECT
+                COALESCE(pi.period_role, 'unassigned') AS period_role,
+                e.*,
+                hd.host_id AS mapped_host_id
+            FROM projected e
+            {_period_join("e")}
+            LEFT JOIN host_dim hd ON hd.raw_value = e.host_raw
+        )
+        SELECT
+            ROW_NUMBER() OVER ()::BIGINT AS flow_id,
+            period_role,
+            window_start,
+            event_time,
+            COALESCE(CAST(mapped_host_id AS VARCHAR), '{sentinel}') AS host_id,
+            mapped_host_id IS NULL AS missing_host,
+            COALESCE(destination_value, '') = '' AS missing_destination,
+            CASE
+                WHEN archive_name LIKE '%.tar'
+                THEN regexp_replace(archive_name, '\\.tar$', '')
+                ELSE strftime(event_time, '%Y-%m-%d')
+            END AS date_label,
+            event_locator,
+            process_raw,
+            pid_raw,
+            port,
+            protocol,
+            destination_value,
+            archive_name,
+            member_name,
+            line_number,
+            raw_event_id,
+            (
+                process_raw <> ''
+                AND COALESCE(destination_value, '') <> ''
+            ) AS is_direct
+        FROM enriched
+        """
+    )
+    connection.execute(
+        """
+        CREATE TEMP TABLE flow_period_counts AS
+        SELECT period_role, COUNT(*)::BIGINT AS flow_event_count
+        FROM flow_inventory
+        GROUP BY 1
+        """
+    )
+
+
+def _create_process_inventory(connection) -> None:
+    """PROCESS payload scan into a single inventory with numeric process_id."""
+    locator = EVENT_LOCATOR_EXPR
+    connection.execute(
+        f"""
+        CREATE TEMP TABLE process_inventory AS
+        WITH projected AS (
+            SELECT
+                TRY_CAST(timestamp_parsed AS TIMESTAMP) AS event_time,
+                date_trunc('minute', TRY_CAST(timestamp_parsed AS TIMESTAMP))
+                    AS window_start,
+                CAST(host_raw AS VARCHAR) AS host_raw,
+                COALESCE(
+                    NULLIF(CAST(image_path_raw AS VARCHAR), ''),
+                    NULLIF(CAST(process_raw AS VARCHAR), ''),
+                    ''
+                ) AS process_raw,
+                COALESCE(CAST(pid_raw AS VARCHAR), '') AS pid_raw,
+                COALESCE(CAST(archive_name AS VARCHAR), '') AS archive_name,
+                COALESCE(CAST(member_name AS VARCHAR), '') AS member_name,
+                TRY_CAST(line_number AS BIGINT) AS line_number,
+                COALESCE(CAST(raw_event_id AS VARCHAR), '') AS raw_event_id,
+                {locator} AS event_locator
+            FROM events
+            WHERE TRY_CAST(timestamp_parsed AS TIMESTAMP) IS NOT NULL
+              AND UPPER(TRIM(CAST(object_raw AS VARCHAR))) = 'PROCESS'
+              AND COALESCE(
+                    NULLIF(CAST(image_path_raw AS VARCHAR), ''),
+                    NULLIF(CAST(process_raw AS VARCHAR), ''),
+                    ''
+                ) <> ''
         ),
         enriched AS (
             SELECT
@@ -482,23 +604,27 @@ def _create_network_scan(connection) -> None:
             {_period_join("e")}
             LEFT JOIN host_dim hd ON hd.raw_value = e.host_raw
         )
-        SELECT * FROM enriched
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE TEMP TABLE cache_period_counts AS
-        WITH projected AS (
-            SELECT TRY_CAST(timestamp_parsed AS TIMESTAMP) AS event_time
-            FROM events
-            WHERE TRY_CAST(timestamp_parsed AS TIMESTAMP) IS NOT NULL
-        )
         SELECT
-            COALESCE(pi.period_role, 'unassigned') AS period_role,
-            COUNT(*)::BIGINT AS event_count
-        FROM projected e
-        {_period_join("e")}
-        GROUP BY 1
+            ROW_NUMBER() OVER ()::BIGINT AS process_id,
+            period_role,
+            window_start,
+            event_time,
+            CAST(host_id AS VARCHAR) AS host_id,
+            CASE
+                WHEN archive_name LIKE '%.tar'
+                THEN regexp_replace(archive_name, '\\.tar$', '')
+                ELSE strftime(event_time, '%Y-%m-%d')
+            END AS date_label,
+            event_locator,
+            _eda08_process_display(process_raw) AS process_name,
+            process_raw,
+            pid_raw,
+            archive_name,
+            member_name,
+            line_number,
+            raw_event_id
+        FROM enriched
+        WHERE host_id IS NOT NULL
         """
     )
 
@@ -522,7 +648,7 @@ def _validate_event_locator_uniqueness(connection, table_name: str) -> None:
 
 
 def _build_temporal_rule_status(connection) -> None:
-    """Ordinal ASOF temporal evaluation without materializing candidate rows."""
+    """Ordinal ASOF temporal status without candidate-row expansion."""
     strict_seconds = STRICT_TOLERANCE_SECONDS
     relaxed_seconds = RELAXED_TOLERANCE_SECONDS
     connection.execute(
@@ -533,7 +659,6 @@ def _build_temporal_rule_status(connection) -> None:
             date_label,
             event_time,
             event_locator,
-            process_name,
             ROW_NUMBER() OVER (
                 PARTITION BY host_id, date_label
                 ORDER BY event_time, event_locator
@@ -557,138 +682,116 @@ def _build_temporal_rule_status(connection) -> None:
     connection.execute(
         """
         CREATE TEMP TABLE temporal_input AS
-        SELECT f.*
+        SELECT
+            f.flow_id,
+            f.host_id,
+            f.date_label,
+            f.event_time
         FROM flow_inventory f
-        LEFT JOIN cascade_direct d ON d.event_locator = f.event_locator
-        LEFT JOIN cascade_pid_match pm ON pm.event_locator = f.event_locator
-        LEFT JOIN cascade_pid_ambiguous pa ON pa.event_locator = f.event_locator
-        WHERE d.event_locator IS NULL
-          AND pm.event_locator IS NULL
-          AND pa.event_locator IS NULL
+        LEFT JOIN cascade_pid_match pm ON pm.flow_id = f.flow_id
+        LEFT JOIN cascade_pid_ambiguous pa ON pa.flow_id = f.flow_id
+        WHERE NOT f.is_direct
+          AND pm.flow_id IS NULL
+          AND pa.flow_id IS NULL
           AND NOT f.missing_host
           AND NOT f.missing_destination
         """
     )
+    # One CTE construction → one narrow persisted temporal status table.
     connection.execute(
         f"""
-        CREATE TEMP TABLE temporal_strict_lo AS
+        CREATE TEMP TABLE cascade_temporal AS
+        WITH
+        strict_lo AS (
+            SELECT
+                f.flow_id,
+                lo.first_ord_at_time AS strict_lower_ord
+            FROM temporal_input f
+            ASOF LEFT JOIN process_time_bounds lo
+              ON f.host_id = lo.host_id
+             AND f.date_label = lo.date_label
+             AND f.event_time - INTERVAL '{strict_seconds} seconds' <= lo.event_time
+        ),
+        strict_hi AS (
+            SELECT
+                f.flow_id,
+                hi.last_ord_at_time AS strict_upper_ord
+            FROM temporal_input f
+            ASOF LEFT JOIN process_time_bounds hi
+              ON f.host_id = hi.host_id
+             AND f.date_label = hi.date_label
+             AND f.event_time + INTERVAL '{strict_seconds} seconds' >= hi.event_time
+        ),
+        relaxed_lo AS (
+            SELECT
+                f.flow_id,
+                lo.first_ord_at_time AS relaxed_lower_ord
+            FROM temporal_input f
+            ASOF LEFT JOIN process_time_bounds lo
+              ON f.host_id = lo.host_id
+             AND f.date_label = lo.date_label
+             AND f.event_time - INTERVAL '{relaxed_seconds} seconds' <= lo.event_time
+        ),
+        relaxed_hi AS (
+            SELECT
+                f.flow_id,
+                hi.last_ord_at_time AS relaxed_upper_ord
+            FROM temporal_input f
+            ASOF LEFT JOIN process_time_bounds hi
+              ON f.host_id = hi.host_id
+             AND f.date_label = hi.date_label
+             AND f.event_time + INTERVAL '{relaxed_seconds} seconds' >= hi.event_time
+        ),
+        counts AS (
+            SELECT
+                f.flow_id,
+                f.host_id,
+                f.date_label,
+                CASE
+                    WHEN sl.strict_lower_ord IS NULL
+                      OR sh.strict_upper_ord IS NULL
+                      OR sh.strict_upper_ord < sl.strict_lower_ord
+                    THEN 0
+                    ELSE sh.strict_upper_ord - sl.strict_lower_ord + 1
+                END::BIGINT AS strict_candidate_count,
+                CASE
+                    WHEN rl.relaxed_lower_ord IS NULL
+                      OR rh.relaxed_upper_ord IS NULL
+                      OR rh.relaxed_upper_ord < rl.relaxed_lower_ord
+                    THEN 0
+                    ELSE rh.relaxed_upper_ord - rl.relaxed_lower_ord + 1
+                END::BIGINT AS relaxed_candidate_count,
+                sl.strict_lower_ord,
+                rl.relaxed_lower_ord
+            FROM temporal_input f
+            LEFT JOIN strict_lo sl ON sl.flow_id = f.flow_id
+            LEFT JOIN strict_hi sh ON sh.flow_id = f.flow_id
+            LEFT JOIN relaxed_lo rl ON rl.flow_id = f.flow_id
+            LEFT JOIN relaxed_hi rh ON rh.flow_id = f.flow_id
+        )
         SELECT
-            f.event_locator,
-            lo.first_ord_at_time AS strict_lower_ord
-        FROM temporal_input f
-        ASOF LEFT JOIN process_time_bounds lo
-          ON f.host_id = lo.host_id
-         AND f.date_label = lo.date_label
-         AND f.event_time - INTERVAL '{strict_seconds} seconds' <= lo.event_time
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE TEMP TABLE temporal_strict_hi AS
-        SELECT
-            f.event_locator,
-            hi.last_ord_at_time AS strict_upper_ord
-        FROM temporal_input f
-        ASOF LEFT JOIN process_time_bounds hi
-          ON f.host_id = hi.host_id
-         AND f.date_label = hi.date_label
-         AND f.event_time + INTERVAL '{strict_seconds} seconds' >= hi.event_time
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE TEMP TABLE temporal_relaxed_lo AS
-        SELECT
-            f.event_locator,
-            lo.first_ord_at_time AS relaxed_lower_ord
-        FROM temporal_input f
-        ASOF LEFT JOIN process_time_bounds lo
-          ON f.host_id = lo.host_id
-         AND f.date_label = lo.date_label
-         AND f.event_time - INTERVAL '{relaxed_seconds} seconds' <= lo.event_time
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE TEMP TABLE temporal_relaxed_hi AS
-        SELECT
-            f.event_locator,
-            hi.last_ord_at_time AS relaxed_upper_ord
-        FROM temporal_input f
-        ASOF LEFT JOIN process_time_bounds hi
-          ON f.host_id = hi.host_id
-         AND f.date_label = hi.date_label
-         AND f.event_time + INTERVAL '{relaxed_seconds} seconds' >= hi.event_time
-        """
-    )
-    connection.execute(
-        """
-        CREATE TEMP TABLE temporal_rule_status_counts AS
-        SELECT
-            f.event_locator,
+            c.flow_id,
+            c.strict_candidate_count,
             CASE
-                WHEN sl.strict_lower_ord IS NULL
-                  OR sh.strict_upper_ord IS NULL
-                  OR sh.strict_upper_ord < sl.strict_lower_ord
-                THEN 0
-                ELSE sh.strict_upper_ord - sl.strict_lower_ord + 1
-            END::BIGINT AS strict_candidate_count,
+                WHEN c.strict_candidate_count = 1 THEN strict_ps.event_locator
+            END AS strict_chosen_process_locator,
+            c.relaxed_candidate_count,
             CASE
-                WHEN rl.relaxed_lower_ord IS NULL
-                  OR rh.relaxed_upper_ord IS NULL
-                  OR rh.relaxed_upper_ord < rl.relaxed_lower_ord
-                THEN 0
-                ELSE rh.relaxed_upper_ord - rl.relaxed_lower_ord + 1
-            END::BIGINT AS relaxed_candidate_count,
-            sl.strict_lower_ord,
-            rl.relaxed_lower_ord
-        FROM temporal_input f
-        LEFT JOIN temporal_strict_lo sl ON sl.event_locator = f.event_locator
-        LEFT JOIN temporal_strict_hi sh ON sh.event_locator = f.event_locator
-        LEFT JOIN temporal_relaxed_lo rl ON rl.event_locator = f.event_locator
-        LEFT JOIN temporal_relaxed_hi rh ON rh.event_locator = f.event_locator
-        """
-    )
-    connection.execute(
-        """
-        CREATE TEMP TABLE temporal_rule_status AS
-        SELECT
-            ti.event_locator,
-            COALESCE(trs.strict_candidate_count, 0)::BIGINT AS strict_candidate_count,
-            CASE
-                WHEN trs.strict_candidate_count = 1
-                THEN strict_ps.process_name
-            END AS strict_process_name,
-            CASE
-                WHEN trs.strict_candidate_count = 1
-                THEN strict_ps.event_locator
-            END AS strict_chosen_locator,
-            COALESCE(trs.relaxed_candidate_count, 0)::BIGINT AS relaxed_candidate_count,
-            CASE
-                WHEN trs.relaxed_candidate_count = 1
-                THEN relaxed_ps.process_name
-            END AS relaxed_process_name,
-            CASE
-                WHEN trs.relaxed_candidate_count = 1
-                THEN relaxed_ps.event_locator
-            END AS relaxed_chosen_locator
-        FROM temporal_input ti
-        LEFT JOIN temporal_rule_status_counts trs
-          ON trs.event_locator = ti.event_locator
+                WHEN c.relaxed_candidate_count = 1 THEN relaxed_ps.event_locator
+            END AS relaxed_chosen_process_locator
+        FROM counts c
         LEFT JOIN process_sorted strict_ps
-          ON strict_ps.host_id = ti.host_id
-         AND strict_ps.date_label = ti.date_label
-         AND strict_ps.proc_ord = trs.strict_lower_ord
-         AND trs.strict_candidate_count = 1
+          ON strict_ps.host_id = c.host_id
+         AND strict_ps.date_label = c.date_label
+         AND strict_ps.proc_ord = c.strict_lower_ord
+         AND c.strict_candidate_count = 1
         LEFT JOIN process_sorted relaxed_ps
-          ON relaxed_ps.host_id = ti.host_id
-         AND relaxed_ps.date_label = ti.date_label
-         AND relaxed_ps.proc_ord = trs.relaxed_lower_ord
-         AND trs.relaxed_candidate_count = 1
+          ON relaxed_ps.host_id = c.host_id
+         AND relaxed_ps.date_label = c.date_label
+         AND relaxed_ps.proc_ord = c.relaxed_lower_ord
+         AND c.relaxed_candidate_count = 1
         """
     )
-
-
 
 
 def _validate_flow_period_counts(connection, cache_total: int) -> dict[str, Any]:
@@ -728,73 +831,20 @@ def _validate_flow_period_counts(connection, cache_total: int) -> dict[str, Any]
     }
 
 
+def _peak_rss_bytes() -> Optional[int]:
+    try:
+        import resource
+
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            return int(usage)
+        return int(usage) * 1024
+    except Exception:
+        return None
+
+
 def _build_pivot_cascade(connection) -> dict[str, Any]:
-    """Build inventory tables and a single auditable pivot cascade."""
-    sentinel = MISSING_HOST_SENTINEL
-    connection.execute(
-        f"""
-        CREATE TEMP TABLE flow_inventory AS
-        SELECT
-            period_role,
-            window_start,
-            event_time,
-            COALESCE(CAST(host_id AS VARCHAR), '{sentinel}') AS host_id,
-            host_id IS NULL AS missing_host,
-            COALESCE(destination_value, '') = '' AS missing_destination,
-            CASE
-                WHEN archive_name LIKE '%.tar'
-                THEN regexp_replace(archive_name, '\\.tar$', '')
-                ELSE strftime(event_time, '%Y-%m-%d')
-            END AS date_label,
-            event_locator,
-            process_raw,
-            pid_raw,
-            port,
-            protocol,
-            destination_value,
-            archive_name,
-            member_name,
-            line_number,
-            raw_event_id
-        FROM network_scan
-        WHERE object_type = 'FLOW'
-        """
-    )
-    connection.execute(
-        """
-        CREATE TEMP TABLE flow_period_counts AS
-        SELECT period_role, COUNT(*)::BIGINT AS flow_event_count
-        FROM flow_inventory
-        GROUP BY 1
-        """
-    )
-    connection.execute(
-        """
-        CREATE TEMP TABLE process_inventory AS
-        SELECT
-            period_role,
-            window_start,
-            event_time,
-            CAST(host_id AS VARCHAR) AS host_id,
-            CASE
-                WHEN archive_name LIKE '%.tar'
-                THEN regexp_replace(archive_name, '\\.tar$', '')
-                ELSE strftime(event_time, '%Y-%m-%d')
-            END AS date_label,
-            event_locator,
-            _eda08_process_display(process_raw) AS process_name,
-            process_raw,
-            pid_raw,
-            archive_name,
-            member_name,
-            line_number,
-            raw_event_id
-        FROM network_scan
-        WHERE object_type = 'PROCESS'
-          AND process_raw <> ''
-          AND host_id IS NOT NULL
-        """
-    )
+    """Build inventories and one narrow numeric-id pivot cascade."""
     _validate_event_locator_uniqueness(connection, "flow_inventory")
     _validate_event_locator_uniqueness(connection, "process_inventory")
     connection.execute(
@@ -804,7 +854,6 @@ def _build_pivot_cascade(connection) -> dict[str, Any]:
             host_id,
             date_label,
             pid_raw,
-            MIN(process_name) AS process_name,
             MIN(event_locator) AS process_locator
         FROM process_inventory
         WHERE pid_raw <> ''
@@ -826,241 +875,258 @@ def _build_pivot_cascade(connection) -> dict[str, Any]:
         HAVING COUNT(DISTINCT process_name) > 1
         """
     )
-    connection.execute(
-        """
-        CREATE TEMP TABLE cascade_direct AS
-        SELECT
-            f.event_locator,
-            _eda08_process_display(f.process_raw) AS process_name
-        FROM flow_inventory f
-        WHERE f.process_raw <> ''
-          AND NOT f.missing_destination
-        """
-    )
+    # Narrow PID results keyed by flow_id; direct eligibility is boolean is_direct.
     connection.execute(
         """
         CREATE TEMP TABLE cascade_pid_ambiguous AS
-        SELECT f.event_locator
+        SELECT f.flow_id
         FROM flow_inventory f
         JOIN host_pid_ambiguity a
           ON a.host_id = f.host_id
          AND a.date_label = f.date_label
          AND a.pid_raw = f.pid_raw
-        WHERE f.pid_raw <> ''
+        WHERE NOT f.is_direct
+          AND f.pid_raw <> ''
           AND NOT f.missing_host
           AND NOT f.missing_destination
-          AND f.event_locator NOT IN (SELECT event_locator FROM cascade_direct)
         """
     )
     connection.execute(
         """
         CREATE TEMP TABLE cascade_pid_match AS
         SELECT
-            f.event_locator,
-            m.process_name
+            f.flow_id,
+            m.process_locator AS chosen_process_locator
         FROM flow_inventory f
         JOIN host_pid_unique_map m
           ON m.host_id = f.host_id
          AND m.date_label = f.date_label
          AND m.pid_raw = f.pid_raw
-        WHERE f.pid_raw <> ''
+        LEFT JOIN cascade_pid_ambiguous pa ON pa.flow_id = f.flow_id
+        WHERE NOT f.is_direct
+          AND f.pid_raw <> ''
           AND NOT f.missing_host
           AND NOT f.missing_destination
-          AND f.event_locator NOT IN (SELECT event_locator FROM cascade_direct)
-          AND f.event_locator NOT IN (SELECT event_locator FROM cascade_pid_ambiguous)
+          AND pa.flow_id IS NULL
         """
     )
     _build_temporal_rule_status(connection)
     connection.execute(
+        f"""
+        CREATE TEMP TABLE cascade_result AS
+        SELECT
+            f.flow_id,
+            CASE
+                WHEN f.is_direct THEN {STATUS_DIRECT}
+                WHEN pa.flow_id IS NOT NULL THEN {STATUS_PID_AMBIG}
+                WHEN pm.flow_id IS NOT NULL THEN {STATUS_PID_MATCH}
+                WHEN COALESCE(ts.strict_candidate_count, 0) = 1
+                    THEN {STATUS_STRICT_MATCH}
+                WHEN COALESCE(ts.strict_candidate_count, 0) > 1
+                    THEN {STATUS_STRICT_AMBIG}
+                WHEN COALESCE(ts.relaxed_candidate_count, 0) = 1
+                    THEN {STATUS_RELAXED_MATCH}
+                WHEN COALESCE(ts.relaxed_candidate_count, 0) > 1
+                    THEN {STATUS_RELAXED_AMBIG}
+                ELSE {STATUS_UNMATCHED}
+            END::TINYINT AS status_code,
+            CASE
+                WHEN f.is_direct THEN NULL
+                WHEN pm.flow_id IS NOT NULL THEN pm.chosen_process_locator
+                WHEN COALESCE(ts.strict_candidate_count, 0) = 1
+                    THEN ts.strict_chosen_process_locator
+                WHEN COALESCE(ts.relaxed_candidate_count, 0) = 1
+                    THEN ts.relaxed_chosen_process_locator
+                ELSE NULL
+            END AS chosen_process_locator
+        FROM flow_inventory f
+        LEFT JOIN cascade_pid_match pm ON pm.flow_id = f.flow_id
+        LEFT JOIN cascade_pid_ambiguous pa ON pa.flow_id = f.flow_id
+        LEFT JOIN cascade_temporal ts ON ts.flow_id = f.flow_id
         """
-        CREATE TEMP TABLE pivot_stage_flows AS
+    )
+    # Drop intermediate PID/temporal tables once cascade_result exists.
+    for table in (
+        "cascade_pid_match",
+        "cascade_pid_ambiguous",
+        "cascade_temporal",
+        "temporal_input",
+        "temporal_rule_status_counts",
+        "temporal_strict_lo",
+        "temporal_strict_hi",
+        "temporal_relaxed_lo",
+        "temporal_relaxed_hi",
+    ):
+        connection.execute(f"DROP TABLE IF EXISTS {table}")
+
+    connection.execute(
+        f"""
+        CREATE TEMP TABLE t16_stage_counts AS
         SELECT
             f.date_label,
             f.host_id,
-            f.event_locator,
-            1 AS enters_direct,
-            CASE WHEN d.event_locator IS NULL THEN 1 ELSE 0 END AS enters_pid,
-            CASE
-                WHEN d.event_locator IS NULL
-                 AND pm.event_locator IS NULL
-                 AND pa.event_locator IS NULL
-                THEN 1 ELSE 0
-            END AS enters_strict,
-            CASE
-                WHEN d.event_locator IS NULL
-                 AND pm.event_locator IS NULL
-                 AND pa.event_locator IS NULL
-                 AND COALESCE(ts.strict_candidate_count, 0) = 0
-                THEN 1 ELSE 0
-            END AS enters_relaxed,
-            CASE WHEN d.event_locator IS NOT NULL THEN 1 ELSE 0 END AS direct_matched,
-            CASE WHEN pm.event_locator IS NOT NULL THEN 1 ELSE 0 END AS pid_matched,
-            CASE WHEN pa.event_locator IS NOT NULL THEN 1 ELSE 0 END AS pid_ambiguous,
-            CASE
-                WHEN d.event_locator IS NULL
-                 AND pm.event_locator IS NULL
-                 AND pa.event_locator IS NULL
-                 AND COALESCE(ts.strict_candidate_count, 0) = 1
-                THEN 1 ELSE 0
-            END AS strict_matched,
-            CASE
-                WHEN d.event_locator IS NULL
-                 AND pm.event_locator IS NULL
-                 AND pa.event_locator IS NULL
-                 AND COALESCE(ts.strict_candidate_count, 0) > 1
-                THEN 1 ELSE 0
-            END AS strict_ambiguous,
-            CASE
-                WHEN d.event_locator IS NULL
-                 AND pm.event_locator IS NULL
-                 AND pa.event_locator IS NULL
-                 AND COALESCE(ts.strict_candidate_count, 0) = 0
-                 AND COALESCE(ts.relaxed_candidate_count, 0) = 1
-                THEN 1 ELSE 0
-            END AS relaxed_matched,
-            CASE
-                WHEN d.event_locator IS NULL
-                 AND pm.event_locator IS NULL
-                 AND pa.event_locator IS NULL
-                 AND COALESCE(ts.strict_candidate_count, 0) = 0
-                 AND COALESCE(ts.relaxed_candidate_count, 0) > 1
-                THEN 1 ELSE 0
-            END AS relaxed_ambiguous,
-            CASE
-                WHEN d.event_locator IS NOT NULL THEN 0
-                WHEN pm.event_locator IS NOT NULL THEN 0
-                WHEN pa.event_locator IS NOT NULL THEN 1
-                WHEN COALESCE(ts.strict_candidate_count, 0) = 1 THEN 0
-                WHEN COALESCE(ts.strict_candidate_count, 0) > 1 THEN 1
-                WHEN COALESCE(ts.relaxed_candidate_count, 0) = 1 THEN 0
-                WHEN COALESCE(ts.relaxed_candidate_count, 0) > 1 THEN 1
-                ELSE 1
-            END AS final_unmatched
+            COUNT(*)::BIGINT AS enters_direct,
+            SUM(CASE WHEN c.status_code = {STATUS_DIRECT} THEN 1 ELSE 0 END)
+                ::BIGINT AS direct_matched,
+            SUM(CASE WHEN NOT f.is_direct THEN 1 ELSE 0 END)::BIGINT AS enters_pid,
+            SUM(CASE WHEN c.status_code = {STATUS_PID_MATCH} THEN 1 ELSE 0 END)
+                ::BIGINT AS pid_matched,
+            SUM(CASE WHEN c.status_code = {STATUS_PID_AMBIG} THEN 1 ELSE 0 END)
+                ::BIGINT AS pid_ambiguous,
+            SUM(
+                CASE
+                    WHEN NOT f.is_direct
+                     AND c.status_code NOT IN (
+                         {STATUS_PID_MATCH}, {STATUS_PID_AMBIG}
+                     )
+                    THEN 1 ELSE 0
+                END
+            )::BIGINT AS enters_strict,
+            SUM(CASE WHEN c.status_code = {STATUS_STRICT_MATCH} THEN 1 ELSE 0 END)
+                ::BIGINT AS strict_matched,
+            SUM(CASE WHEN c.status_code = {STATUS_STRICT_AMBIG} THEN 1 ELSE 0 END)
+                ::BIGINT AS strict_ambiguous,
+            SUM(
+                CASE
+                    WHEN NOT f.is_direct
+                     AND c.status_code IN (
+                        {STATUS_RELAXED_MATCH},
+                        {STATUS_RELAXED_AMBIG},
+                        {STATUS_UNMATCHED}
+                     )
+                    THEN 1 ELSE 0
+                END
+            )::BIGINT AS enters_relaxed,
+            SUM(CASE WHEN c.status_code = {STATUS_RELAXED_MATCH} THEN 1 ELSE 0 END)
+                ::BIGINT AS relaxed_matched,
+            SUM(CASE WHEN c.status_code = {STATUS_RELAXED_AMBIG} THEN 1 ELSE 0 END)
+                ::BIGINT AS relaxed_ambiguous,
+            SUM(
+                CASE
+                    WHEN c.status_code IN (
+                        {STATUS_UNMATCHED},
+                        {STATUS_PID_AMBIG},
+                        {STATUS_STRICT_AMBIG},
+                        {STATUS_RELAXED_AMBIG}
+                    )
+                    THEN 1 ELSE 0
+                END
+            )::BIGINT AS final_unmatched
         FROM flow_inventory f
-        LEFT JOIN cascade_direct d ON d.event_locator = f.event_locator
-        LEFT JOIN cascade_pid_match pm ON pm.event_locator = f.event_locator
-        LEFT JOIN cascade_pid_ambiguous pa ON pa.event_locator = f.event_locator
-        LEFT JOIN temporal_rule_status ts ON ts.event_locator = f.event_locator
+        JOIN cascade_result c ON c.flow_id = f.flow_id
+        GROUP BY 1, 2
         """
     )
+
+    # linked_flows as a VIEW over narrow cascade_result + inventories.
     connection.execute(
-        """
-        CREATE TEMP TABLE pivot_rule_ambiguity AS
-        SELECT event_locator, 'host_process_pid' AS pivot_rule
-        FROM cascade_pid_ambiguous
-        UNION ALL
-        SELECT event_locator, 'host_temporal_strict' AS pivot_rule
-        FROM pivot_stage_flows
-        WHERE strict_ambiguous = 1
-        UNION ALL
-        SELECT event_locator, 'host_temporal_relaxed' AS pivot_rule
-        FROM pivot_stage_flows
-        WHERE relaxed_ambiguous = 1
-        """
-    )
-    connection.execute(
-        """
-        CREATE TEMP TABLE pivot_assignments AS
+        f"""
+        CREATE TEMP VIEW linked_flows AS
         SELECT
             f.period_role,
             f.window_start,
             f.event_time,
             f.host_id,
-            f.missing_host,
-            f.missing_destination,
             f.date_label,
             f.event_locator,
-            f.process_raw,
-            f.pid_raw,
+            CASE
+                WHEN c.status_code = {STATUS_DIRECT}
+                THEN _eda08_process_display(f.process_raw)
+                ELSE p.process_name
+            END AS process_name,
+            f.destination_value,
+            _eda08_destination_category(f.destination_value) AS destination_category,
             f.port,
             f.protocol,
-            f.destination_value,
+            CASE c.status_code
+                WHEN {STATUS_DIRECT} THEN 'direct_same_event'
+                WHEN {STATUS_PID_MATCH} THEN 'host_process_pid'
+                WHEN {STATUS_STRICT_MATCH} THEN 'host_temporal_strict'
+                WHEN {STATUS_RELAXED_MATCH} THEN 'host_temporal_relaxed'
+            END AS pivot_rule,
+            f.raw_event_id,
             f.archive_name,
             f.member_name,
-            f.line_number,
-            f.raw_event_id,
-            CASE
-                WHEN ps.direct_matched = 1 THEN 'direct_same_event'
-                WHEN ps.pid_matched = 1 THEN 'host_process_pid'
-                WHEN ps.strict_matched = 1 THEN 'host_temporal_strict'
-                WHEN ps.relaxed_matched = 1 THEN 'host_temporal_relaxed'
-                ELSE 'unmatched'
-            END AS pivot_rule,
-            COALESCE(
-                d.process_name,
-                pm.process_name,
-                ts.strict_process_name,
-                ts.relaxed_process_name,
+            f.line_number
+        FROM cascade_result c
+        JOIN flow_inventory f ON f.flow_id = c.flow_id
+        LEFT JOIN process_inventory p
+          ON p.event_locator = c.chosen_process_locator
+        WHERE c.status_code IN (
+            {STATUS_DIRECT},
+            {STATUS_PID_MATCH},
+            {STATUS_STRICT_MATCH},
+            {STATUS_RELAXED_MATCH}
+        )
+          AND NOT f.missing_destination
+          AND COALESCE(
+                CASE
+                    WHEN c.status_code = {STATUS_DIRECT}
+                    THEN _eda08_process_display(f.process_raw)
+                    ELSE p.process_name
+                END,
                 ''
-            ) AS process_name
-        FROM flow_inventory f
-        JOIN pivot_stage_flows ps ON ps.event_locator = f.event_locator
-        LEFT JOIN cascade_direct d ON d.event_locator = f.event_locator
-        LEFT JOIN cascade_pid_match pm ON pm.event_locator = f.event_locator
-        LEFT JOIN temporal_rule_status ts ON ts.event_locator = f.event_locator
+            ) <> ''
         """
     )
-    connection.execute(
-        """
-        CREATE TEMP TABLE linked_flows AS
-        SELECT
-            period_role,
-            window_start,
-            event_time,
-            host_id,
-            date_label,
-            event_locator,
-            process_name,
-            destination_value,
-            _eda08_destination_category(destination_value) AS destination_category,
-            port,
-            protocol,
-            pivot_rule,
-            raw_event_id,
-            archive_name,
-            member_name,
-            line_number
-        FROM pivot_assignments
-        WHERE pivot_rule <> 'unmatched'
-          AND NOT missing_destination
-          AND COALESCE(process_name, '') <> ''
-        """
+
+    def _count_status(code: int) -> int:
+        return int(
+            connection.execute(
+                f"""
+                SELECT COUNT(*)::BIGINT
+                FROM cascade_result
+                WHERE status_code = {code}
+                """
+            ).fetchone()[0]
+        )
+
+    direct_count = _count_status(STATUS_DIRECT)
+    pid_matched = _count_status(STATUS_PID_MATCH)
+    pid_ambiguous = _count_status(STATUS_PID_AMBIG)
+    strict_matched = _count_status(STATUS_STRICT_MATCH)
+    strict_ambiguous = _count_status(STATUS_STRICT_AMBIG)
+    relaxed_matched = _count_status(STATUS_RELAXED_MATCH)
+    relaxed_ambiguous = _count_status(STATUS_RELAXED_AMBIG)
+    unmatched_plain = _count_status(STATUS_UNMATCHED)
+    final_unmatched = (
+        unmatched_plain + pid_ambiguous + strict_ambiguous + relaxed_ambiguous
     )
+    flow_total = int(
+        connection.execute("SELECT COUNT(*)::BIGINT FROM flow_inventory").fetchone()[0]
+    )
+    reconciled = (
+        direct_count
+        + pid_matched
+        + pid_ambiguous
+        + strict_matched
+        + strict_ambiguous
+        + relaxed_matched
+        + relaxed_ambiguous
+        + unmatched_plain
+    )
+    if reconciled != flow_total:
+        raise CacheAuditError(
+            "Cascade reconciliation failed: "
+            f"parts={reconciled} flow_total={flow_total}"
+        )
+
     linked_by_rule = {
-        str(row.pivot_rule): int(row.linked_count)
-        for row in _query_frame(
-            connection,
-            """
-            SELECT pivot_rule, COUNT(*)::BIGINT AS linked_count
-            FROM pivot_assignments
-            WHERE pivot_rule <> 'unmatched'
-            GROUP BY 1
-            """,
-        ).itertuples(index=False)
+        "direct_same_event": direct_count,
+        "host_process_pid": pid_matched,
+        "host_temporal_strict": strict_matched,
+        "host_temporal_relaxed": relaxed_matched,
     }
     ambiguous_by_rule = {
-        str(row.pivot_rule): int(row.ambiguous_count)
-        for row in _query_frame(
-            connection,
-            """
-            SELECT pivot_rule, COUNT(*)::BIGINT AS ambiguous_count
-            FROM pivot_rule_ambiguity
-            GROUP BY 1
-            """,
-        ).itertuples(index=False)
+        "host_process_pid": pid_ambiguous,
+        "host_temporal_strict": strict_ambiguous,
+        "host_temporal_relaxed": relaxed_ambiguous,
     }
-    ambiguous_unique_flow_count = int(
-        connection.execute(
-            """
-            SELECT COUNT(DISTINCT event_locator)::BIGINT
-            FROM pivot_rule_ambiguity
-            """
-        ).fetchone()[0]
-    )
     return {
-        "flow_total": int(
+        "flow_total": flow_total,
+        "process_total": int(
             connection.execute(
-                "SELECT COUNT(*)::BIGINT FROM flow_inventory"
+                "SELECT COUNT(*)::BIGINT FROM process_inventory"
             ).fetchone()[0]
         ),
         "missing_host_count": int(
@@ -1077,18 +1143,20 @@ def _build_pivot_cascade(connection) -> dict[str, Any]:
                 """
             ).fetchone()[0]
         ),
-        "linked_by_rule": linked_by_rule,
-        "unmatched_count": int(
-            connection.execute(
-                """
-                SELECT COUNT(*)::BIGINT
-                FROM pivot_assignments
-                WHERE pivot_rule = 'unmatched'
-                """
-            ).fetchone()[0]
-        ),
-        "ambiguous_by_rule": ambiguous_by_rule,
-        "ambiguous_unique_flow_count": ambiguous_unique_flow_count,
+        "direct_count": direct_count,
+        "pid_matched": pid_matched,
+        "pid_ambiguous": pid_ambiguous,
+        "strict_matched": strict_matched,
+        "strict_ambiguous": strict_ambiguous,
+        "relaxed_matched": relaxed_matched,
+        "relaxed_ambiguous": relaxed_ambiguous,
+        "unmatched_plain": unmatched_plain,
+        "linked_by_rule": {k: v for k, v in linked_by_rule.items() if v},
+        "unmatched_count": final_unmatched,
+        "ambiguous_by_rule": {k: v for k, v in ambiguous_by_rule.items() if v},
+        "ambiguous_unique_flow_count": pid_ambiguous
+        + strict_ambiguous
+        + relaxed_ambiguous,
         "pid_ambiguous_mappings": int(
             connection.execute(
                 "SELECT COUNT(*)::BIGINT FROM host_pid_ambiguity"
@@ -1103,6 +1171,7 @@ def _build_pivot_cascade(connection) -> dict[str, Any]:
 
 
 
+
 def build_t16(connection) -> Any:
     rule_values = ", ".join(f"('{rule_id}')" for rule_id in PIVOT_RULE_IDS)
     frame = _query_frame(
@@ -1113,51 +1182,46 @@ def build_t16(connection) -> Any:
                 date_label,
                 host_id,
                 'direct_same_event' AS pivot_rule,
-                SUM(enters_direct)::BIGINT AS endpoint_flow_events,
-                SUM(direct_matched)::BIGINT AS matched_network_events,
+                enters_direct AS endpoint_flow_events,
+                direct_matched AS matched_network_events,
                 0::BIGINT AS ambiguous_match_count
-            FROM pivot_stage_flows
-            GROUP BY 1, 2
+            FROM t16_stage_counts
             UNION ALL
             SELECT
                 date_label,
                 host_id,
                 'host_process_pid',
-                SUM(enters_pid)::BIGINT,
-                SUM(pid_matched)::BIGINT,
-                SUM(pid_ambiguous)::BIGINT
-            FROM pivot_stage_flows
-            GROUP BY 1, 2
+                enters_pid,
+                pid_matched,
+                pid_ambiguous
+            FROM t16_stage_counts
             UNION ALL
             SELECT
                 date_label,
                 host_id,
                 'host_temporal_strict',
-                SUM(enters_strict)::BIGINT,
-                SUM(strict_matched)::BIGINT,
-                SUM(strict_ambiguous)::BIGINT
-            FROM pivot_stage_flows
-            GROUP BY 1, 2
+                enters_strict,
+                strict_matched,
+                strict_ambiguous
+            FROM t16_stage_counts
             UNION ALL
             SELECT
                 date_label,
                 host_id,
                 'host_temporal_relaxed',
-                SUM(enters_relaxed)::BIGINT,
-                SUM(relaxed_matched)::BIGINT,
-                SUM(relaxed_ambiguous)::BIGINT
-            FROM pivot_stage_flows
-            GROUP BY 1, 2
+                enters_relaxed,
+                relaxed_matched,
+                relaxed_ambiguous
+            FROM t16_stage_counts
             UNION ALL
             SELECT
                 date_label,
                 host_id,
                 'unmatched',
-                SUM(final_unmatched)::BIGINT,
+                final_unmatched,
                 0::BIGINT,
                 0::BIGINT
-            FROM pivot_stage_flows
-            GROUP BY 1, 2
+            FROM t16_stage_counts
         ),
         rule_dims AS (
             SELECT pivot_rule
@@ -1165,7 +1229,7 @@ def build_t16(connection) -> Any:
         ),
         host_dims AS (
             SELECT DISTINCT date_label, host_id
-            FROM pivot_stage_flows
+            FROM t16_stage_counts
         ),
         full_dims AS (
             SELECT h.date_label, h.host_id, r.pivot_rule
@@ -1228,6 +1292,7 @@ def build_t16(connection) -> Any:
         """,
     )
     return frame[T16_COLUMNS]
+
 
 
 def build_t17(connection, evidence_cap: int) -> Any:
@@ -1807,7 +1872,8 @@ def _readme(metadata: dict[str, Any]) -> str:
             f"Window size: {metadata.get('window_size')}",
             f"Pivot rule version: {metadata.get('pivot_rule_version')}",
             f"Destination category version: {metadata.get('destination_category_version')}",
-            f"Payload scans: {metadata.get('payload_scan_count')}",
+            f"FLOW payload scans: {metadata.get('payload_flow_scan_count')}",
+            f"PROCESS payload scans: {metadata.get('payload_process_scan_count')}",
             f"Cache reconciliation scans: {metadata.get('cache_reconciliation_scan_count')}",
             f"FLOW events scanned: {metadata.get('flow_event_count')}",
             f"FLOW rows with missing host: {metadata.get('missing_host_count')}",
@@ -1844,6 +1910,7 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
     spill_owned = False
     staging: Optional[pathlib.Path] = None
     execution_log: list[str] = []
+    cascade_probe_only = bool(getattr(args, "cascade_probe_only", False))
 
     def stage(number: int, message: str) -> None:
         line = f"[STAGE {number}/7] {message}"
@@ -1862,12 +1929,60 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
         _register_inputs(connection, config)
         stage(2, "registered read-only cache, T9 identities, and periods")
 
-        _create_network_scan(connection)
+        _create_cache_period_counts(connection)
+        _create_flow_inventory(connection)
+        _create_process_inventory(connection)
         cascade_stats = _build_pivot_cascade(connection)
         period_stats = _validate_flow_period_counts(
             connection, int(config["cache_metadata"]["total_events_written"])
         )
-        stage(3, f"payload scan {PAYLOAD_SCAN_COUNT}/{PAYLOAD_SCAN_COUNT} complete")
+        stage(
+            3,
+            "payload scans complete "
+            f"(FLOW={PAYLOAD_FLOW_SCAN_COUNT}, "
+            f"PROCESS={PAYLOAD_PROCESS_SCAN_COUNT}, "
+            f"reconciliation={CACHE_RECONCILIATION_SCAN_COUNT})",
+        )
+
+        if cascade_probe_only:
+            elapsed = time.perf_counter() - started
+            peak_rss = _peak_rss_bytes()
+            print("EDA 8 cascade probe reconciliation:", flush=True)
+            print(f"  flow_count={cascade_stats['flow_total']}", flush=True)
+            print(f"  process_count={cascade_stats['process_total']}", flush=True)
+            print(f"  direct_count={cascade_stats['direct_count']}", flush=True)
+            print(
+                f"  pid_matched={cascade_stats['pid_matched']} "
+                f"pid_ambiguous={cascade_stats['pid_ambiguous']}",
+                flush=True,
+            )
+            print(
+                f"  strict_matched={cascade_stats['strict_matched']} "
+                f"strict_ambiguous={cascade_stats['strict_ambiguous']}",
+                flush=True,
+            )
+            print(
+                f"  relaxed_matched={cascade_stats['relaxed_matched']} "
+                f"relaxed_ambiguous={cascade_stats['relaxed_ambiguous']}",
+                flush=True,
+            )
+            print(
+                f"  final_unmatched={cascade_stats['unmatched_count']}",
+                flush=True,
+            )
+            print(f"  elapsed_seconds={elapsed:.3f}", flush=True)
+            if peak_rss is not None:
+                print(f"  peak_rss_bytes={peak_rss}", flush=True)
+            return {
+                "cascade_probe_only": True,
+                "runtime_seconds": round(elapsed, 3),
+                "peak_rss_bytes": peak_rss,
+                **cascade_stats,
+                **period_stats,
+                "t16_row_count": 0,
+                "t17_row_count": 0,
+                "linked_flow_count": cascade_stats["linked_flow_count"],
+            }
 
         t16 = build_t16(connection)
         t17 = build_t17(connection, config["evidence_cap"])
@@ -1915,10 +2030,12 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
             "strict_tolerance_seconds": STRICT_TOLERANCE_SECONDS,
             "relaxed_tolerance_seconds": RELAXED_TOLERANCE_SECONDS,
             "lag_minutes": list(LAG_MINUTES),
-            "payload_scan_count": PAYLOAD_SCAN_COUNT,
+            "payload_flow_scan_count": PAYLOAD_FLOW_SCAN_COUNT,
+            "payload_process_scan_count": PAYLOAD_PROCESS_SCAN_COUNT,
             "cache_reconciliation_scan_count": CACHE_RECONCILIATION_SCAN_COUNT,
             "count_semantics": T16_COUNT_SEMANTICS,
             "flow_event_count": cascade_stats["flow_total"],
+            "process_event_count": cascade_stats["process_total"],
             "missing_host_count": cascade_stats["missing_host_count"],
             "missing_destination_count": cascade_stats["missing_destination_count"],
             "cache_role_counts": period_stats["cache_role_counts"],
@@ -1995,6 +2112,7 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
             shutil.rmtree(spill_path, ignore_errors=True)
 
 
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
     try:
@@ -2002,6 +2120,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     except CacheAuditError as exc:
         print(f"EDA 8 failed: {exc}", file=sys.stderr)
         return 1
+    if metadata.get("cascade_probe_only"):
+        print("EDA 8 cascade probe complete", flush=True)
+        return 0
     print(
         "EDA 8 complete: "
         f"T16={metadata['t16_row_count']}, "
