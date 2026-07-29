@@ -40,6 +40,7 @@ WINDOW_SECONDS = 60
 STRICT_TOLERANCE_SECONDS = 1
 RELAXED_TOLERANCE_SECONDS = 15
 DEFAULT_EVIDENCE_CAP = 20
+DEFAULT_T17_HOST_BUCKETS = 32
 PAYLOAD_FLOW_SCAN_COUNT = 1
 PAYLOAD_PROCESS_SCAN_COUNT = 1
 CACHE_RECONCILIATION_SCAN_COUNT = 1
@@ -214,6 +215,19 @@ def build_parser() -> argparse.ArgumentParser:
             "Build inventories, cascade, T16, and bounded T17 only; print "
             "summary metrics and exit without F9/F10 or publishing."
         ),
+    )
+    parser.add_argument(
+        "--t17-host-buckets",
+        type=int,
+        default=DEFAULT_T17_HOST_BUCKETS,
+        help=(
+            f"Number of host buckets for partitioned T17 (default {DEFAULT_T17_HOST_BUCKETS})."
+        ),
+    )
+    parser.add_argument(
+        "--t17-work-dir",
+        default=None,
+        help="Optional local work directory for partitioned T17 intermediates.",
     )
     return parser
 
@@ -1313,18 +1327,186 @@ T17_ALLOWED_CATEGORIES = (
     "invalid_or_unresolved",
 )
 
+_T17_STAGING_COLUMNS = [
+    "date_label",
+    "period_role",
+    "host_id",
+    "process_name",
+    "destination_value",
+    "destination_category",
+    "port",
+    "protocol",
+    "event_time",
+    "raw_event_id",
+    "event_locator",
+    "host_bucket",
+]
 
-def build_t17(
-    connection,
-    evidence_cap: int,
+_T17_PARTIAL_SCHEMA_DOC = """
+Partial Parquet schema (written by _t17_process_partition):
+  period_role          VARCHAR   -- verified_benign | evaluation
+  host_id              VARCHAR
+  process_name         VARCHAR
+  destination_value    VARCHAR
+  destination_category VARCHAR
+  port                 VARCHAR
+  protocol             VARCHAR
+  connection_count     BIGINT
+  first_seen_time      TIMESTAMP
+  raw_event_ids        VARCHAR   -- JSON array of raw_event_id strings
+  evidence_with_locators VARCHAR -- JSON array of {raw_event_id, event_locator} structs
+"""
+
+
+def _validate_host_buckets(num_buckets: int) -> int:
+    n = int(num_buckets)
+    if n < 1 or n > 1024:
+        raise CacheAuditError(
+            f"--t17-host-buckets must be between 1 and 1024, got {n}"
+        )
+    return n
+
+
+def host_bucket_for_host_id(host_id: str, num_buckets: int) -> int:
+    _validate_host_buckets(num_buckets)
+    import duckdb
+
+    result = duckdb.execute(
+        "SELECT CAST(hash(COALESCE($1, '')) % $2 AS INTEGER)",
+        [host_id, num_buckets],
+    ).fetchone()[0]
+    val = int(result)
+    if val < 0:
+        val += num_buckets
+    return val
+
+
+def _t17_staging_fingerprint(
     *,
-    on_behavior_aggregate: Optional[Any] = None,
-    on_bounded_evidence: Optional[Any] = None,
-) -> dict[str, Any]:
-    cap = int(evidence_cap)
+    code_commit: Optional[str],
+    evidence_cap: int,
+    host_buckets: int,
+    cache_schema_version: str = "",
+    cache_event_count: int = 0,
+    manifest_identity: str = "",
+    period_map_identity: str = "",
+    entity_dictionary_identity: str = "",
+    duckdb_version: str = "",
+) -> str:
+    import duckdb as _ddb
+
+    payload = _compact_json({
+        "code_commit": code_commit or "",
+        "evidence_cap": evidence_cap,
+        "host_buckets": host_buckets,
+        "cache_schema_version": cache_schema_version,
+        "cache_event_count": cache_event_count,
+        "manifest_identity": manifest_identity,
+        "period_map_identity": period_map_identity,
+        "entity_dictionary_identity": entity_dictionary_identity,
+        "duckdb_version": duckdb_version or getattr(_ddb, "__version__", ""),
+    })
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _export_linked_flows_staging(
+    connection, staging_dir: pathlib.Path, num_buckets: int,
+    linked_flow_count: int,
+) -> tuple[int, list[str], list[int]]:
+    _validate_host_buckets(num_buckets)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    escaped = str(staging_dir).replace("'", "''")
     connection.execute(
         f"""
-        CREATE TEMP TABLE t17_behavior_aggregate AS
+        COPY (
+            SELECT
+                date_label,
+                period_role,
+                host_id,
+                process_name,
+                destination_value,
+                destination_category,
+                port,
+                protocol,
+                event_time,
+                raw_event_id,
+                event_locator,
+                CAST(hash(COALESCE(host_id, '')) % {num_buckets} AS INTEGER) AS host_bucket
+            FROM linked_flows
+        ) TO '{escaped}'
+        (FORMAT PARQUET, PARTITION_BY (date_label, host_bucket), OVERWRITE_OR_IGNORE)
+        """
+    )
+    dates, buckets = _discover_staging_partitions(staging_dir)
+    return linked_flow_count, dates, buckets
+
+
+def _discover_staging_partitions(
+    staging_dir: pathlib.Path,
+) -> tuple[list[str], list[int]]:
+    dates: set[str] = set()
+    buckets: set[int] = set()
+    import re as _re
+
+    date_re = _re.compile(r"^date_label=(.+)$")
+    bucket_re = _re.compile(r"^host_bucket=(-?\d+)$")
+    for date_dir in staging_dir.iterdir():
+        if not date_dir.is_dir():
+            continue
+        dm = date_re.match(date_dir.name)
+        if not dm:
+            continue
+        date_val = dm.group(1)
+        for bucket_dir in date_dir.iterdir():
+            if not bucket_dir.is_dir():
+                continue
+            bm = bucket_re.match(bucket_dir.name)
+            if not bm:
+                continue
+            if any(bucket_dir.glob("*.parquet")):
+                dates.add(date_val)
+                buckets.add(int(bm.group(1)))
+    return sorted(dates), sorted(buckets)
+
+
+def _t17_fresh_connection(
+    *, memory_limit: str, temp_dir: Optional[str], threads: int
+):
+    import duckdb
+
+    spill: Optional[pathlib.Path] = None
+    owned = False
+    if temp_dir is None:
+        spill = pathlib.Path(tempfile.mkdtemp(prefix="eda08_t17_tmp_"))
+        owned = True
+    else:
+        spill = pathlib.Path(temp_dir)
+        spill.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect()
+    eda5._configure_duckdb(
+        conn, memory_limit=memory_limit, temp_dir=str(spill), threads=threads
+    )
+    conn.execute("SET preserve_insertion_order = false")
+    return conn, str(spill), owned
+
+
+def _t17_process_partition(
+    connection,
+    partition_path: pathlib.Path,
+    evidence_cap: int,
+    output_path: pathlib.Path,
+) -> int:
+    cap = int(evidence_cap)
+    escaped_in = str(partition_path).replace("'", "''")
+    connection.execute(
+        f"""
+        CREATE TEMP TABLE _part_input AS
+        SELECT * FROM read_parquet('{escaped_in}/*.parquet')
+        """
+    )
+    connection.execute(
+        f"""
+        CREATE TEMP TABLE _part_agg AS
         SELECT
             period_role,
             host_id,
@@ -1344,266 +1526,492 @@ def build_t17(
                 {cap}
             ) FILTER (WHERE COALESCE(raw_event_id, '') <> '')
                 AS bounded_evidence_candidates
-        FROM linked_flows
+        FROM _part_input
         GROUP BY 1, 2, 3, 4, 5, 6, 7
-        """
-    )
-    if on_behavior_aggregate is not None:
-        on_behavior_aggregate()
-    connection.execute(
-        """
-        CREATE TEMP TABLE t17_benign_behavior_keys AS
-        SELECT DISTINCT host_id, process_name, destination_value, port
-        FROM t17_behavior_aggregate
-        WHERE period_role = 'verified_benign'
         """
     )
     connection.execute(
         f"""
-        CREATE TEMP TABLE t17_bounded_evidence AS
+        CREATE TEMP TABLE _part_evidence AS
         WITH unnested AS (
             SELECT
-                ba.period_role,
-                ba.host_id,
-                ba.process_name,
-                ba.destination_value,
-                ba.destination_category,
-                ba.port,
-                ba.protocol,
+                ba.period_role, ba.host_id, ba.process_name,
+                ba.destination_value, ba.destination_category,
+                ba.port, ba.protocol,
                 elem.raw_event_id AS raw_event_id,
                 elem.event_locator AS event_locator
-            FROM t17_behavior_aggregate ba,
+            FROM _part_agg ba,
             LATERAL UNNEST(ba.bounded_evidence_candidates) AS u(elem)
             WHERE COALESCE(elem.raw_event_id, '') <> ''
         ),
         deduped AS (
             SELECT
-                period_role,
-                host_id,
-                process_name,
-                destination_value,
-                destination_category,
-                port,
-                protocol,
+                period_role, host_id, process_name,
+                destination_value, destination_category, port, protocol,
                 raw_event_id,
                 MIN(event_locator) AS earliest_event_locator
             FROM unnested
             GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
         ),
         ranked AS (
-            SELECT
-                *,
+            SELECT *,
                 ROW_NUMBER() OVER (
-                    PARTITION BY
-                        period_role,
-                        host_id,
-                        process_name,
-                        destination_value,
-                        destination_category,
-                        port,
-                        protocol
+                    PARTITION BY period_role, host_id, process_name,
+                        destination_value, destination_category, port, protocol
                     ORDER BY earliest_event_locator, raw_event_id
                 ) AS evidence_rank
             FROM deduped
+        ),
+        evidence_lists AS (
+            SELECT
+                period_role, host_id, process_name,
+                destination_value, destination_category, port, protocol,
+                to_json(list(raw_event_id ORDER BY earliest_event_locator, raw_event_id))
+                    AS raw_event_ids,
+                to_json(list(
+                    struct_pack(raw_event_id := raw_event_id,
+                                event_locator := earliest_event_locator)
+                    ORDER BY earliest_event_locator, raw_event_id
+                )) AS evidence_with_locators
+            FROM ranked WHERE evidence_rank <= {cap}
+            GROUP BY 1, 2, 3, 4, 5, 6, 7
         )
         SELECT
-            period_role,
-            host_id,
-            process_name,
-            destination_value,
-            destination_category,
-            port,
-            protocol,
-            raw_event_id,
-            earliest_event_locator
-        FROM ranked
-        WHERE evidence_rank <= {cap}
+            a.period_role, a.host_id, a.process_name,
+            a.destination_value, a.destination_category, a.port, a.protocol,
+            a.connection_count, a.first_seen_time,
+            COALESCE(e.raw_event_ids, '[]') AS raw_event_ids,
+            COALESCE(e.evidence_with_locators, '[]') AS evidence_with_locators
+        FROM _part_agg a
+        LEFT JOIN evidence_lists e
+          ON e.period_role = a.period_role AND e.host_id = a.host_id
+         AND e.process_name = a.process_name
+         AND e.destination_value = a.destination_value
+         AND e.destination_category = a.destination_category
+         AND e.port = a.port AND e.protocol = a.protocol
         """
     )
-    if on_bounded_evidence is not None:
-        on_bounded_evidence()
+    row_count = int(
+        connection.execute("SELECT COUNT(*) FROM _part_evidence").fetchone()[0]
+    )
+    if row_count > 0:
+        escaped_out = str(output_path).replace("'", "''")
+        connection.execute(
+            f"""
+            COPY (SELECT * FROM _part_evidence)
+            TO '{escaped_out}' (FORMAT PARQUET)
+            """
+        )
+    for table in ("_part_input", "_part_agg", "_part_evidence"):
+        connection.execute(f"DROP TABLE IF EXISTS {table}")
+    return row_count
+
+
+def _t17_merge_bucket(
+    connection,
+    partial_paths: list[pathlib.Path],
+    evidence_cap: int,
+    output_path: pathlib.Path,
+) -> dict[str, Any]:
+    cap = int(evidence_cap)
+    if not partial_paths:
+        return {
+            "final_rows": 0,
+            "connection_count_sum": 0,
+            "max_evidence": 0,
+            "missing_evidence": 0,
+        }
+    globs = ", ".join(
+        f"'{str(p).replace(chr(39), chr(39)+chr(39))}'" for p in partial_paths
+    )
+    connection.execute(
+        f"CREATE TEMP TABLE _bucket_partials AS SELECT * FROM read_parquet([{globs}])"
+    )
     connection.execute(
         """
-        CREATE TEMP TABLE t17_evidence_lists AS
+        CREATE TEMP TABLE _bucket_merged AS
         SELECT
-            period_role,
-            host_id,
-            process_name,
-            destination_value,
-            destination_category,
-            port,
-            protocol,
-            to_json(
-                list(raw_event_id ORDER BY earliest_event_locator, raw_event_id)
-            ) AS raw_event_ids
-        FROM t17_bounded_evidence
+            period_role, host_id, process_name,
+            destination_value, destination_category, port, protocol,
+            SUM(connection_count)::BIGINT AS connection_count,
+            MIN(first_seen_time) AS first_seen_time
+        FROM _bucket_partials
         GROUP BY 1, 2, 3, 4, 5, 6, 7
         """
     )
     connection.execute(
         """
-        CREATE TEMP TABLE t17_final AS
-        SELECT
-            ba.period_role AS period,
-            ba.host_id,
-            ba.process_name,
-            ba.destination_value,
-            ba.destination_category,
-            ba.port,
-            ba.protocol,
-            ba.connection_count,
-            ba.first_seen_time,
-            CASE WHEN b.host_id IS NOT NULL THEN 'yes' ELSE 'no' END
-                AS benign_seen_before_yes_no,
-            COALESCE(el.raw_event_ids, '[]') AS raw_event_ids
-        FROM t17_behavior_aggregate ba
-        LEFT JOIN t17_benign_behavior_keys b
-          ON b.host_id = ba.host_id
-         AND b.process_name = ba.process_name
-         AND b.destination_value = ba.destination_value
-         AND b.port = ba.port
-        LEFT JOIN t17_evidence_lists el
-          ON el.period_role = ba.period_role
-         AND el.host_id = ba.host_id
-         AND el.process_name = ba.process_name
-         AND el.destination_value = ba.destination_value
-         AND el.destination_category = ba.destination_category
-         AND el.port = ba.port
-         AND el.protocol = ba.protocol
+        CREATE TEMP TABLE _bucket_benign_keys AS
+        SELECT DISTINCT host_id, process_name, destination_value, port
+        FROM _bucket_merged
+        WHERE period_role = 'verified_benign'
         """
     )
-    return validate_t17_in_duckdb(connection, cap)
-
-
-def validate_t17_in_duckdb(connection, evidence_cap: int) -> dict[str, Any]:
-    cap = int(evidence_cap)
-    columns = [
-        str(row[0])
-        for row in connection.execute("DESCRIBE t17_final").fetchall()
-    ]
-    if columns != T17_COLUMNS:
-        raise CacheAuditError("T17 schema mismatch")
-    row_count = int(connection.execute("SELECT COUNT(*) FROM t17_final").fetchone()[0])
-    if row_count > 0:
-        invalid_counts = int(
-            connection.execute(
-                "SELECT COUNT(*) FROM t17_final WHERE connection_count <= 0"
-            ).fetchone()[0]
-        )
-        if invalid_counts:
-            raise CacheAuditError("T17 connection_count must be > 0")
-        null_first_seen = int(
-            connection.execute(
-                "SELECT COUNT(*) FROM t17_final WHERE first_seen_time IS NULL"
-            ).fetchone()[0]
-        )
-        if null_first_seen:
-            raise CacheAuditError("T17 first_seen_time must be nonnull")
-        invalid_benign = int(
-            connection.execute(
-                """
-                SELECT COUNT(*) FROM t17_final
-                WHERE benign_seen_before_yes_no NOT IN ('yes', 'no')
-                """
-            ).fetchone()[0]
-        )
-        if invalid_benign:
-            raise CacheAuditError(
-                "T17 benign_seen_before_yes_no must contain only yes/no"
-            )
-        allowed = ", ".join(f"'{value}'" for value in T17_ALLOWED_CATEGORIES)
-        invalid_categories = int(
-            connection.execute(
-                f"""
-                SELECT COUNT(*) FROM t17_final
-                WHERE destination_category NOT IN ({allowed})
-                """
-            ).fetchone()[0]
-        )
-        if invalid_categories:
-            raise CacheAuditError("T17 destination_category contains invalid values")
-        invalid_json = int(
-            connection.execute(
-                """
-                SELECT COUNT(*) FROM t17_final
-                WHERE NOT json_valid(raw_event_ids)
-                """
-            ).fetchone()[0]
-        )
-        if invalid_json:
-            raise CacheAuditError("T17 raw_event_ids must be valid JSON arrays")
-        over_cap = int(
-            connection.execute(
-                f"""
-                SELECT COUNT(*) FROM t17_final
-                WHERE json_array_length(raw_event_ids::JSON) > {cap}
-                """
-            ).fetchone()[0]
-        )
-        if over_cap:
-            raise CacheAuditError(
-                f"T17 evidence arrays must contain at most {cap} IDs"
-            )
-        empty_ids = int(
-            connection.execute(
-                """
-                SELECT COUNT(*) FROM (
-                    SELECT UNNEST(
-                        from_json(raw_event_ids, '["VARCHAR"]')
-                    ) AS event_id
-                    FROM t17_final
+    connection.execute(
+        f"""
+        CREATE TEMP TABLE _bucket_final AS
+        WITH unnested_evidence AS (
+            SELECT
+                p.period_role, p.host_id, p.process_name,
+                p.destination_value, p.destination_category,
+                p.port, p.protocol,
+                elem.raw_event_id,
+                elem.event_locator
+            FROM _bucket_partials p,
+            LATERAL UNNEST(
+                from_json(
+                    p.evidence_with_locators,
+                    '[{{"raw_event_id":"VARCHAR","event_locator":"VARCHAR"}}]'
                 )
-                WHERE COALESCE(event_id, '') = ''
-                """
-            ).fetchone()[0]
+            ) AS u(elem)
+            WHERE COALESCE(elem.raw_event_id, '') <> ''
+        ),
+        deduped AS (
+            SELECT
+                period_role, host_id, process_name,
+                destination_value, destination_category, port, protocol,
+                raw_event_id,
+                MIN(event_locator) AS earliest_event_locator
+            FROM unnested_evidence
+            GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
+        ),
+        ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY period_role, host_id, process_name,
+                        destination_value, destination_category, port, protocol
+                    ORDER BY earliest_event_locator, raw_event_id
+                ) AS evidence_rank
+            FROM deduped
+        ),
+        evidence_lists AS (
+            SELECT
+                period_role, host_id, process_name,
+                destination_value, destination_category, port, protocol,
+                to_json(list(raw_event_id ORDER BY earliest_event_locator, raw_event_id))
+                    AS raw_event_ids
+            FROM ranked WHERE evidence_rank <= {cap}
+            GROUP BY 1, 2, 3, 4, 5, 6, 7
         )
-        if empty_ids:
-            raise CacheAuditError("T17 evidence arrays must not contain empty IDs")
-    max_evidence = int(
+        SELECT
+            m.period_role AS period,
+            m.host_id, m.process_name,
+            m.destination_value, m.destination_category, m.port, m.protocol,
+            m.connection_count, m.first_seen_time,
+            CASE WHEN bk.host_id IS NOT NULL THEN 'yes' ELSE 'no' END
+                AS benign_seen_before_yes_no,
+            COALESCE(el.raw_event_ids, '[]') AS raw_event_ids
+        FROM _bucket_merged m
+        LEFT JOIN _bucket_benign_keys bk
+          ON bk.host_id = m.host_id AND bk.process_name = m.process_name
+         AND bk.destination_value = m.destination_value AND bk.port = m.port
+        LEFT JOIN evidence_lists el
+          ON el.period_role = m.period_role AND el.host_id = m.host_id
+         AND el.process_name = m.process_name
+         AND el.destination_value = m.destination_value
+         AND el.destination_category = m.destination_category
+         AND el.port = m.port AND el.protocol = m.protocol
+        """
+    )
+    final_rows = int(
+        connection.execute("SELECT COUNT(*) FROM _bucket_final").fetchone()[0]
+    )
+    conn_sum = int(
+        connection.execute(
+            "SELECT COALESCE(SUM(connection_count), 0)::BIGINT FROM _bucket_final"
+        ).fetchone()[0]
+    )
+    max_ev = int(
         connection.execute(
             """
             SELECT COALESCE(MAX(json_array_length(raw_event_ids::JSON)), 0)
-            FROM t17_final
+            FROM _bucket_final
             """
         ).fetchone()[0]
     )
-    missing_evidence = int(
+    missing_ev = int(
         connection.execute(
             """
-            SELECT COUNT(*) FROM t17_final
+            SELECT COUNT(*) FROM _bucket_final
             WHERE COALESCE(raw_event_ids, '[]') = '[]'
             """
         ).fetchone()[0]
     )
+    _validate_t17_table(connection, "_bucket_final", cap)
+    if final_rows > 0:
+        escaped_out = str(output_path).replace("'", "''")
+        connection.execute(
+            f"""
+            COPY (SELECT * FROM _bucket_final)
+            TO '{escaped_out}' (FORMAT PARQUET)
+            """
+        )
+    for table in (
+        "_bucket_partials", "_bucket_merged", "_bucket_benign_keys",
+        "_bucket_final",
+    ):
+        connection.execute(f"DROP TABLE IF EXISTS {table}")
     return {
-        "t17_row_count": row_count,
-        "t17_evidence_max_count": max_evidence,
-        "t17_missing_evidence_row_count": missing_evidence,
+        "final_rows": final_rows,
+        "connection_count_sum": conn_sum,
+        "max_evidence": max_ev,
+        "missing_evidence": missing_ev,
     }
 
 
-def _export_t17_csv(connection, path: pathlib.Path) -> None:
-    temp = path.with_suffix(path.suffix + f".{uuid.uuid4().hex}.tmp")
-    escaped = str(temp).replace("'", "''")
-    columns = ", ".join(T17_COLUMNS)
-    connection.execute(
-        f"""
-        COPY (
-            SELECT {columns}
-            FROM t17_final
-            ORDER BY
-                period,
-                host_id,
-                process_name,
-                destination_value,
-                port,
-                protocol,
-                first_seen_time
-        ) TO '{escaped}'
-        (HEADER, FORMAT CSV)
-        """
+def _validate_t17_table(connection, table_name: str, evidence_cap: int) -> None:
+    cap = int(evidence_cap)
+    row_count = int(
+        connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
     )
-    os.replace(temp, path)
+    if row_count == 0:
+        return
+    invalid_counts = int(
+        connection.execute(
+            f"SELECT COUNT(*) FROM {table_name} WHERE connection_count <= 0"
+        ).fetchone()[0]
+    )
+    if invalid_counts:
+        raise CacheAuditError("T17 connection_count must be > 0")
+    null_first_seen = int(
+        connection.execute(
+            f"SELECT COUNT(*) FROM {table_name} WHERE first_seen_time IS NULL"
+        ).fetchone()[0]
+    )
+    if null_first_seen:
+        raise CacheAuditError("T17 first_seen_time must be nonnull")
+    invalid_benign = int(
+        connection.execute(
+            f"""
+            SELECT COUNT(*) FROM {table_name}
+            WHERE benign_seen_before_yes_no NOT IN ('yes', 'no')
+            """
+        ).fetchone()[0]
+    )
+    if invalid_benign:
+        raise CacheAuditError("T17 benign_seen_before_yes_no must contain only yes/no")
+    allowed = ", ".join(f"'{v}'" for v in T17_ALLOWED_CATEGORIES)
+    invalid_cat = int(
+        connection.execute(
+            f"""
+            SELECT COUNT(*) FROM {table_name}
+            WHERE destination_category NOT IN ({allowed})
+            """
+        ).fetchone()[0]
+    )
+    if invalid_cat:
+        raise CacheAuditError("T17 destination_category contains invalid values")
+    invalid_json = int(
+        connection.execute(
+            f"SELECT COUNT(*) FROM {table_name} WHERE NOT json_valid(raw_event_ids)"
+        ).fetchone()[0]
+    )
+    if invalid_json:
+        raise CacheAuditError("T17 raw_event_ids must be valid JSON arrays")
+    over_cap = int(
+        connection.execute(
+            f"""
+            SELECT COUNT(*) FROM {table_name}
+            WHERE json_array_length(raw_event_ids::JSON) > {cap}
+            """
+        ).fetchone()[0]
+    )
+    if over_cap:
+        raise CacheAuditError(f"T17 evidence arrays must contain at most {cap} IDs")
+    empty_ids = int(
+        connection.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT UNNEST(from_json(raw_event_ids, '["VARCHAR"]')) AS event_id
+                FROM {table_name}
+            ) WHERE COALESCE(event_id, '') = ''
+            """
+        ).fetchone()[0]
+    )
+    if empty_ids:
+        raise CacheAuditError("T17 evidence arrays must not contain empty IDs")
+
+
+def _t17_concatenate_csv(
+    bucket_paths: dict[int, pathlib.Path],
+    output_path: pathlib.Path,
+    *,
+    memory_limit: str,
+    temp_dir: Optional[str],
+    threads: int,
+) -> None:
+    temp = output_path.with_suffix(output_path.suffix + f".{uuid.uuid4().hex}.tmp")
+    columns = ", ".join(T17_COLUMNS)
+    order_clause = (
+        "ORDER BY period, host_id, process_name, destination_value, "
+        "port, protocol, first_seen_time"
+    )
+    bucket_csvs: list[pathlib.Path] = []
+    first = True
+    try:
+        for bucket_num in sorted(bucket_paths):
+            bucket_file = bucket_paths[bucket_num]
+            if not bucket_file.exists():
+                continue
+            conn, spill, owned = _t17_fresh_connection(
+                memory_limit=memory_limit, temp_dir=temp_dir, threads=threads
+            )
+            try:
+                escaped_in = str(bucket_file).replace("'", "''")
+                bucket_csv = output_path.parent / f".t17_bucket_{bucket_num}_{uuid.uuid4().hex}.csv"
+                escaped_out = str(bucket_csv).replace("'", "''")
+                conn.execute(
+                    f"""
+                    COPY (
+                        SELECT {columns} FROM read_parquet('{escaped_in}')
+                        {order_clause}
+                    ) TO '{escaped_out}' (FORMAT CSV, HEADER {('TRUE' if first else 'FALSE')})
+                    """
+                )
+                bucket_csvs.append(bucket_csv)
+                first = False
+            finally:
+                conn.close()
+                if owned and spill:
+                    shutil.rmtree(spill, ignore_errors=True)
+        with open(temp, "wb") as out:
+            if first:
+                out.write((",".join(T17_COLUMNS) + "\n").encode("utf-8"))
+            for csv_path in bucket_csvs:
+                with open(csv_path, "rb") as inp:
+                    shutil.copyfileobj(inp, out)
+        os.replace(temp, output_path)
+    finally:
+        for csv_path in bucket_csvs:
+            csv_path.unlink(missing_ok=True)
+        if temp.exists():
+            temp.unlink(missing_ok=True)
+
+
+def build_t17_partitioned(
+    *,
+    staging_dir: pathlib.Path,
+    work_dir: pathlib.Path,
+    evidence_cap: int,
+    host_buckets: int,
+    memory_limit: str,
+    temp_dir: Optional[str],
+    threads: int,
+    linked_flow_count: int,
+    dates: list[str],
+    buckets: list[int],
+    log_fn: Any = None,
+) -> dict[str, Any]:
+    partials_dir = work_dir / "partials"
+    finals_dir = work_dir / "finals"
+    partials_dir.mkdir(parents=True, exist_ok=True)
+    finals_dir.mkdir(parents=True, exist_ok=True)
+
+    partition_keys: list[tuple[str, int]] = []
+    for date in sorted(dates):
+        for bucket in sorted(buckets):
+            part_dir = staging_dir / f"date_label={date}" / f"host_bucket={bucket}"
+            if part_dir.is_dir() and any(part_dir.glob("*.parquet")):
+                partition_keys.append((date, bucket))
+
+    total_partitions = len(partition_keys)
+    partial_row_total = 0
+    partial_files: dict[int, list[pathlib.Path]] = defaultdict(list)
+
+    for idx, (date, bucket) in enumerate(partition_keys, 1):
+        part_dir = staging_dir / f"date_label={date}" / f"host_bucket={bucket}"
+        partial_out = partials_dir / f"partial_{date}_{bucket}.parquet"
+        if log_fn:
+            log_fn(f"[T17 PARTITION {idx}/{total_partitions}] date={date} bucket={bucket}")
+        conn, spill, owned = _t17_fresh_connection(
+            memory_limit=memory_limit, temp_dir=temp_dir, threads=threads
+        )
+        try:
+            started = time.perf_counter()
+            rows = _t17_process_partition(conn, part_dir, evidence_cap, partial_out)
+            elapsed = time.perf_counter() - started
+            partial_row_total += rows
+            if partial_out.exists():
+                partial_files[bucket].append(partial_out)
+            if log_fn:
+                log_fn(
+                    f"[T17 PARTITION {idx}/{total_partitions}] "
+                    f"partial rows={rows} elapsed={elapsed:.2f}s"
+                )
+        finally:
+            conn.close()
+            if owned and spill:
+                shutil.rmtree(spill, ignore_errors=True)
+
+    final_row_total = 0
+    connection_count_total = 0
+    max_evidence_global = 0
+    missing_evidence_total = 0
+    bucket_final_paths: dict[int, pathlib.Path] = {}
+
+    all_buckets = sorted(set(buckets))
+    for idx, bucket in enumerate(all_buckets, 1):
+        bucket_partials = partial_files.get(bucket, [])
+        final_out = finals_dir / f"final_bucket_{bucket}.parquet"
+        if log_fn:
+            log_fn(f"[T17 MERGE BUCKET {idx}/{len(all_buckets)}] bucket={bucket}")
+        conn, spill, owned = _t17_fresh_connection(
+            memory_limit=memory_limit, temp_dir=temp_dir, threads=threads
+        )
+        try:
+            result = _t17_merge_bucket(
+                conn, bucket_partials, evidence_cap, final_out
+            )
+            final_row_total += result["final_rows"]
+            connection_count_total += result["connection_count_sum"]
+            max_evidence_global = max(max_evidence_global, result["max_evidence"])
+            missing_evidence_total += result["missing_evidence"]
+            if final_out.exists():
+                bucket_final_paths[bucket] = final_out
+            if log_fn:
+                log_fn(
+                    f"[T17 MERGE BUCKET {idx}/{len(all_buckets)}] "
+                    f"final rows={result['final_rows']}"
+                )
+        finally:
+            conn.close()
+            if owned and spill:
+                shutil.rmtree(spill, ignore_errors=True)
+
+    if connection_count_total != linked_flow_count:
+        raise CacheAuditError(
+            "T17 connection_count reconciliation failed: "
+            f"sum={connection_count_total} linked_flow_count={linked_flow_count}"
+        )
+
+    return {
+        "t17_row_count": final_row_total,
+        "t17_evidence_max_count": max_evidence_global,
+        "t17_missing_evidence_row_count": missing_evidence_total,
+        "t17_connection_count_sum": connection_count_total,
+        "t17_partition_count": total_partitions,
+        "t17_partial_row_count": partial_row_total,
+        "t17_date_count": len(dates),
+        "t17_host_bucket_count": host_buckets,
+        "bucket_final_paths": bucket_final_paths,
+    }
+
+
+def _export_t17_csv_from_buckets(
+    bucket_final_paths: dict[int, pathlib.Path],
+    output_path: pathlib.Path,
+    *,
+    memory_limit: str,
+    temp_dir: Optional[str],
+    threads: int,
+) -> None:
+    _t17_concatenate_csv(
+        bucket_final_paths,
+        output_path,
+        memory_limit=memory_limit,
+        temp_dir=temp_dir,
+        threads=threads,
+    )
 
 
 def build_f9_data(connection) -> Any:
@@ -2080,9 +2488,15 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
     spill_path = None
     spill_owned = False
     staging: Optional[pathlib.Path] = None
+    t17_work_owned = False
+    t17_work_dir: Optional[pathlib.Path] = None
     execution_log: list[str] = []
     cascade_probe_only = bool(getattr(args, "cascade_probe_only", False))
     t17_probe_only = bool(getattr(args, "t17_probe_only", False))
+    host_buckets = _validate_host_buckets(
+        int(getattr(args, "t17_host_buckets", DEFAULT_T17_HOST_BUCKETS))
+    )
+    user_t17_work_dir = getattr(args, "t17_work_dir", None)
 
     def stage(number: int, message: str) -> None:
         line = f"[STAGE {number}/7] {message}"
@@ -2093,6 +2507,10 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
         line = f"[STAGE {label}/7] {message}"
         execution_log.append(line)
         print(line, flush=True)
+
+    def logmsg(message: str) -> None:
+        execution_log.append(message)
+        print(message, flush=True)
 
     try:
         stage(1, "validated configuration and evidence-backed period map")
@@ -2163,35 +2581,112 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
 
         t16 = build_t16(connection)
         substage("4A", "T16 constructed")
-        t17_summary = build_t17(
-            connection,
-            config["evidence_cap"],
-            on_behavior_aggregate=lambda: substage(
-                "4B", "T17 behavior aggregation complete"
-            ),
-            on_bounded_evidence=lambda: substage(
-                "4C", "T17 bounded evidence complete"
-            ),
+
+        # For full production: build F9/F10 before closing primary connection.
+        f9_data = None
+        f10_data = None
+        host_labels = {}
+        if not t17_probe_only:
+            f9_data = build_f9_data(connection)
+            substage("4D", "F9 data constructed")
+            f10_data = build_f10_data(connection)
+            substage("4E", "F10 data constructed")
+            host_labels = _host_label_map(connection)
+
+        # Set up T17 work directory: always a unique child run directory.
+        code_commit = _git_commit(config["project_root"])
+        import duckdb as _ddb_ver
+
+        run_tag = (
+            f"run_{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+            f"_{uuid.uuid4().hex[:12]}"
         )
+        if user_t17_work_dir is not None:
+            t17_work_root = pathlib.Path(user_t17_work_dir).expanduser()
+            t17_work_root.mkdir(parents=True, exist_ok=True)
+            t17_work_dir = t17_work_root / run_tag
+            t17_work_dir.mkdir()
+            t17_work_owned = False
+        else:
+            t17_work_dir = pathlib.Path(
+                tempfile.mkdtemp(prefix="eda08_t17_work_")
+            )
+            t17_work_owned = True
+
+        fp = _t17_staging_fingerprint(
+            code_commit=code_commit,
+            evidence_cap=config["evidence_cap"],
+            host_buckets=host_buckets,
+            cache_schema_version=str(config["cache_metadata"].get("schema_version", "")),
+            cache_event_count=int(config["cache_metadata"].get("total_events_written", 0)),
+            manifest_identity=_sha256_file(pathlib.Path(config["manifest_path"])),
+            period_map_identity=_sha256_file(config["period_map"]),
+            entity_dictionary_identity=str(config["entity_dictionary"]),
+            duckdb_version=getattr(_ddb_ver, "__version__", ""),
+        )
+        fp_file = t17_work_dir / ".t17_fingerprint"
+        fp_file.write_text(fp + "\n")
+
+        linked_staging = t17_work_dir / "linked_staging"
+        linked_flow_count, dates, buckets = _export_linked_flows_staging(
+            connection, linked_staging, host_buckets,
+            linked_flow_count=cascade_stats["linked_flow_count"],
+        )
+        substage("4B", "partitioned linked-FLOW staging exported")
+
+        # Release primary connection.
+        connection.close()
+        connection = None
+        if spill_owned and spill_path:
+            shutil.rmtree(spill_path, ignore_errors=True)
+            spill_path = None
+            spill_owned = False
+
+        t17_summary = build_t17_partitioned(
+            staging_dir=linked_staging,
+            work_dir=t17_work_dir,
+            evidence_cap=config["evidence_cap"],
+            host_buckets=host_buckets,
+            memory_limit=config["memory_limit"],
+            temp_dir=args.duckdb_temp_dir,
+            threads=config["threads"],
+            linked_flow_count=linked_flow_count,
+            dates=dates,
+            buckets=buckets,
+            log_fn=logmsg,
+        )
+        substage("4C", "partitioned T17 complete")
 
         if t17_probe_only:
             elapsed = time.perf_counter() - started
             peak_rss = _peak_rss_bytes()
             print("EDA 8 T17 probe reconciliation:", flush=True)
-            print(f"  t16_row_count={int(len(t16))}", flush=True)
-            print(f"  t17_row_count={t17_summary['t17_row_count']}", flush=True)
+            print(f"  linked_flow_count={linked_flow_count}", flush=True)
+            print(f"  date_count={len(dates)}", flush=True)
+            print(f"  host_bucket_count={host_buckets}", flush=True)
             print(
-                "  t17_evidence_max_count="
-                f"{t17_summary['t17_evidence_max_count']}",
+                f"  completed_partitions={t17_summary['t17_partition_count']}",
                 flush=True,
             )
             print(
-                f"  linked_flow_count={cascade_stats['linked_flow_count']}",
+                f"  partial_row_count={t17_summary['t17_partial_row_count']}",
+                flush=True,
+            )
+            print(f"  t16_row_count={int(len(t16))}", flush=True)
+            print(f"  t17_row_count={t17_summary['t17_row_count']}", flush=True)
+            print(
+                f"  t17_connection_count_sum={t17_summary['t17_connection_count_sum']}",
+                flush=True,
+            )
+            print(
+                f"  t17_evidence_max_count={t17_summary['t17_evidence_max_count']}",
                 flush=True,
             )
             print(f"  elapsed_seconds={elapsed:.3f}", flush=True)
             if peak_rss is not None:
                 print(f"  peak_rss_bytes={peak_rss}", flush=True)
+            if t17_work_dir and t17_work_dir.exists():
+                shutil.rmtree(t17_work_dir, ignore_errors=True)
             return {
                 "t17_probe_only": True,
                 "runtime_seconds": round(elapsed, 3),
@@ -2200,23 +2695,25 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
                 **t17_summary,
                 **cascade_stats,
                 **period_stats,
+                "linked_flow_count": linked_flow_count,
             }
 
-        f9_data = build_f9_data(connection)
-        substage("4D", "F9 data constructed")
-        f10_data = build_f10_data(connection)
-        substage("4E", "F10 data constructed")
         validate_outputs(t16, t17_summary, f10_data)
         substage("4F", "post-cascade outputs validated")
         stage(4, "T16/T17 and F9/F10 data constructed and validated")
 
-        host_labels = _host_label_map(connection)
         parent = eda5._nearest_existing_directory(config["output_dir"].parent)
         staging = pathlib.Path(
             tempfile.mkdtemp(prefix=".eda08_staging_", dir=str(parent))
         )
         _atomic_write_csv(t16, staging / "T16_endpoint_network_pivot_success.csv")
-        _export_t17_csv(connection, staging / "T17_process_to_destination_behavior.csv")
+        _export_t17_csv_from_buckets(
+            t17_summary["bucket_final_paths"],
+            staging / "T17_process_to_destination_behavior.csv",
+            memory_limit=config["memory_limit"],
+            temp_dir=args.duckdb_temp_dir,
+            threads=config["threads"],
+        )
         create_f9(
             f9_data,
             png_path=staging / "F9_destination_novelty_over_time.png",
@@ -2267,13 +2764,15 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
                 "ambiguous_unique_flow_count"
             ],
             "pid_ambiguous_mappings": cascade_stats["pid_ambiguous_mappings"],
-            "linked_flow_count": cascade_stats["linked_flow_count"],
+            "linked_flow_count": linked_flow_count,
             "t16_row_count": int(len(t16)),
             "t17_row_count": int(t17_summary["t17_row_count"]),
             "t17_evidence_max_count": int(t17_summary["t17_evidence_max_count"]),
             "t17_missing_evidence_row_count": int(
                 t17_summary["t17_missing_evidence_row_count"]
             ),
+            "t17_host_bucket_count": host_buckets,
+            "t17_partition_count": t17_summary["t17_partition_count"],
             "f9_host_minute_count": int(len(f9_data)),
             "f10_cumulative_counts": {
                 str(int(row.lag_minutes)): int(
@@ -2293,7 +2792,7 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
             "duckdb_temp_dir_policy": (
                 "explicit" if args.duckdb_temp_dir else "owned_local_tempfile"
             ),
-            "code_commit": _git_commit(config["project_root"]),
+            "code_commit": code_commit,
             "metadata_self_hash_policy": "excluded_self_reference",
         }
         _atomic_write_text(_readme(metadata), staging / "README.md")
@@ -2314,6 +2813,13 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
         _assert_no_temp_files(staging)
         _publish_staging(staging, config["output_dir"])
         staging = None
+        if t17_work_owned and t17_work_dir and t17_work_dir.exists():
+            shutil.rmtree(t17_work_dir, ignore_errors=True)
+        if t17_work_dir and t17_work_dir.exists():
+            if t17_work_owned:
+                shutil.rmtree(t17_work_dir, ignore_errors=True)
+            else:
+                shutil.rmtree(t17_work_dir, ignore_errors=True)
         print(
             f"EDA 8 published deliverables to {config['output_dir']}",
             flush=True,
@@ -2322,6 +2828,8 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
     except Exception:
         if staging is not None and staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
+        if t17_work_owned and t17_work_dir and t17_work_dir.exists():
+            shutil.rmtree(t17_work_dir, ignore_errors=True)
         raise
     finally:
         if staging is not None and staging.exists():

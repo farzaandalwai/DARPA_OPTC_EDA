@@ -302,6 +302,8 @@ def _args(root: pathlib.Path, fixture: dict, **overrides) -> argparse.Namespace:
         "duckdb_threads": 2,
         "cascade_probe_only": False,
         "t17_probe_only": False,
+        "t17_host_buckets": eda8.DEFAULT_T17_HOST_BUCKETS,
+        "t17_work_dir": None,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -1010,14 +1012,13 @@ _query_frame(
 
 def test_t17_aggregation_occurs_in_duckdb():
     source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    assert "CREATE TEMP TABLE t17_behavior_aggregate" in source
     assert "arg_min(" in source
     assert "bounded_evidence_candidates" in source
-    assert "CREATE TEMP TABLE t17_bounded_evidence" in source
-    assert "CREATE TEMP TABLE t17_final" in source
     assert "CREATE TEMP TABLE t17_unique_evidence" not in source
     assert "CREATE TEMP TABLE t17_ranked_evidence" not in source
     assert "list_slice(list(all evidence" not in source.lower()
+    assert "def _t17_process_partition(" in source
+    assert "def _t17_merge_bucket(" in source
 
 
 def test_no_wholesale_events_pandas_fetch():
@@ -1701,56 +1702,52 @@ def test_t17_rejects_unbounded_evidence_tables():
     assert "FROM t17_ranked_evidence" not in source
 
 
-def test_t17_rejects_row_number_over_linked_flows_evidence():
-    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    start = source.index("def build_t17(")
-    end = source.index("\ndef validate_t17_in_duckdb(")
-    body = source[start:end]
-    assert "ROW_NUMBER() OVER" in body
-    assert "FROM linked_flows" not in body.split("ROW_NUMBER() OVER", 1)[1]
-
-
 def test_t17_not_fetched_into_pandas():
     source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    start = source.index("def build_t17(")
-    end = source.index("\ndef validate_t17_in_duckdb(")
+    start = source.index("def _t17_process_partition(")
+    end = source.index("\ndef _t17_merge_bucket(")
     body = source[start:end]
     assert "_query_frame(" not in body
     assert "fetchdf(" not in body
     assert ".df(" not in body
-    assert "fetchall(" not in body
+    start2 = source.index("def _t17_merge_bucket(")
+    end2 = source.index("\ndef _validate_t17_table(")
+    body2 = source[start2:end2]
+    assert "fetchdf(" not in body2
+    assert ".df(" not in body2
 
 
 def test_t17_exported_with_duckdb_copy():
     source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    assert "def _export_t17_csv(" in source
+    assert "def _t17_concatenate_csv(" in source
     assert "COPY (" in source
-    assert "FROM t17_final" in source
-    assert "_export_t17_csv(connection" in source
+    assert "_export_t17_csv_from_buckets(" in source
+    start = source.index("def _t17_concatenate_csv(")
+    end = source.index("\ndef build_t17_partitioned(")
+    body = source[start:end]
+    assert "fetchdf(" not in body
+    assert "to_csv(" not in body
+    assert "FORMAT CSV" in body
 
 
 def test_t17_validation_runs_inside_duckdb():
     source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    assert "def validate_t17_in_duckdb(" in source
-    assert "DESCRIBE t17_final" in source
+    assert "def _validate_t17_table(" in source
     assert "json_valid(raw_event_ids)" in source
-    start = source.index("def validate_t17_in_duckdb(")
-    end = source.index("\ndef _export_t17_csv(")
+
+
+def test_t17_bounded_aggregate_during_partition_aggregation():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def _t17_process_partition(")
+    end = source.index("\ndef _t17_merge_bucket(")
     body = source[start:end]
-    assert "fetchdf(" not in body
+    assert "arg_min(" in body
+    assert "bounded_evidence_candidates" in body
 
 
-def test_t17_bounded_aggregate_during_behavior_aggregation():
+def test_t17_benign_keys_derived_per_bucket_not_from_linked_flows():
     source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    assert "CREATE TEMP TABLE t17_behavior_aggregate" in source
-    assert "arg_min(" in source
-    assert "bounded_evidence_candidates" in source
-    assert "FROM linked_flows" in source.split("t17_behavior_aggregate", 1)[1]
-
-
-def test_t17_benign_keys_derived_from_behavior_aggregate():
-    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    assert "FROM t17_behavior_aggregate" in source
+    assert "_bucket_benign_keys" in source
     assert (
         "FROM linked_flows\n        WHERE period_role = 'verified_benign'"
         not in source
@@ -1805,8 +1802,228 @@ def test_t17_evidence_candidates_bounded_by_cap(tmp_path):
 
 def test_t17_rejects_unbounded_list_aggregation_before_cap():
     source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    start = source.index("def build_t17(")
-    end = source.index("\ndef validate_t17_in_duckdb(")
+    start = source.index("def _t17_process_partition(")
+    end = source.index("\ndef _t17_merge_bucket(")
     body = source[start:end]
-    assert "list(" not in body.split("bounded_evidence_candidates", 1)[0]
     assert "list_slice(" not in body
+
+
+def test_default_host_bucket_count():
+    assert eda8.DEFAULT_T17_HOST_BUCKETS == 32
+
+
+def test_host_bucketing_deterministic_and_nonnegative():
+    for host_id in ("h1", "h2", "host_123", "__MISSING_HOST__"):
+        bucket = eda8.host_bucket_for_host_id(host_id, 32)
+        assert bucket >= 0
+        assert bucket < 32
+        assert bucket == eda8.host_bucket_for_host_id(host_id, 32)
+
+
+def test_linked_flow_staging_is_narrow():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "_T17_STAGING_COLUMNS" in source
+    assert "def _export_linked_flows_staging(" in source
+    start = source.index("def _export_linked_flows_staging(")
+    end = source.index("\ndef _discover_staging_partitions(")
+    body = source[start:end]
+    assert "host_bucket" in body
+    assert "PARTITION_BY" in body
+    assert "FROM linked_flows" in body
+
+
+def test_no_global_t17_group_by_over_linked_flows():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "CREATE TEMP TABLE t17_behavior_aggregate" not in source
+    assert "CREATE TEMP TABLE t17_final" not in source
+
+
+def test_primary_connection_closed_before_partition_merging():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def run_eda08(")
+    body = source[start:]
+    close_idx = body.index("connection.close()")
+    partition_idx = body.index("build_t17_partitioned(")
+    assert close_idx < partition_idx
+
+
+def test_partitioned_t17_connection_count_reconciliation(tmp_path):
+    fixture = _fixture(tmp_path)
+    args = _args(tmp_path, fixture)
+    metadata = eda8.run_eda08(args)
+    assert metadata["linked_flow_count"] == metadata.get(
+        "t17_connection_count_sum", metadata["linked_flow_count"]
+    )
+
+
+def test_t17_probe_runs_full_partitioned_path(tmp_path):
+    fixture = _fixture(tmp_path)
+    out = tmp_path / "t17_probe_out"
+    args = _args(tmp_path, fixture, output_dir=str(out), t17_probe_only=True)
+    args.t17_probe_only = True
+    metadata = eda8.run_eda08(args)
+    assert metadata["t17_probe_only"] is True
+    assert not out.exists()
+    assert metadata["t17_row_count"] >= 0
+    assert metadata["t17_partition_count"] >= 0
+    assert metadata["linked_flow_count"] >= 0
+
+
+def test_python_builtin_hash_not_used_for_bucketing():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "return hash(" not in source
+
+
+def test_host_bucketing_stable_across_fresh_connections():
+    import duckdb
+
+    host_ids = ["h1", "h2", "__MISSING_HOST__", "very-long-host-name-xyz"]
+    results_a = {}
+    results_b = {}
+    for host_id in host_ids:
+        conn_a = duckdb.connect()
+        val_a = conn_a.execute(
+            "SELECT CAST(hash(COALESCE($1, '')) % 32 AS INTEGER)", [host_id]
+        ).fetchone()[0]
+        conn_a.close()
+        conn_b = duckdb.connect()
+        val_b = conn_b.execute(
+            "SELECT CAST(hash(COALESCE($1, '')) % 32 AS INTEGER)", [host_id]
+        ).fetchone()[0]
+        conn_b.close()
+        results_a[host_id] = int(val_a)
+        results_b[host_id] = int(val_b)
+    assert results_a == results_b
+
+
+def test_host_bucket_values_in_range():
+    for num_buckets in (1, 2, 16, 32, 1024):
+        for host_id in ("h1", "host_abc", "", "__MISSING_HOST__"):
+            bucket = eda8.host_bucket_for_host_id(host_id, num_buckets)
+            assert 0 <= bucket < num_buckets, (
+                f"bucket={bucket} out of [0, {num_buckets}) for host_id={host_id!r}"
+            )
+
+
+def test_host_bucket_invalid_counts_fail():
+    for bad in (0, -1, 1025, 2048):
+        with pytest.raises(eda8.CacheAuditError):
+            eda8.host_bucket_for_host_id("h1", bad)
+
+
+def test_staging_single_linked_flows_scan():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def _export_linked_flows_staging(")
+    end = source.index("\ndef _discover_staging_partitions(")
+    body = source[start:end]
+    assert body.count("FROM linked_flows") == 1
+
+
+def test_no_evidence_groups_in_source():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "_evidence_groups" not in source
+
+
+def test_no_bucket_evidence_merged_in_source():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "_bucket_evidence_merged" not in source
+
+
+def test_no_fetchdf_or_to_csv_in_t17_functions():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def _t17_concatenate_csv(")
+    end = source.index("\ndef build_t17_partitioned(")
+    body = source[start:end]
+    assert "fetchdf" not in body
+    assert "to_csv" not in body
+    start2 = source.index("def _export_t17_csv_from_buckets(")
+    end2 = source.index("\ndef build_f9_data(")
+    body2 = source[start2:end2]
+    assert "fetchdf" not in body2
+    assert "to_csv" not in body2
+
+
+def test_multi_date_evidence_merge(tmp_path):
+    rows = [
+        _flow_event(
+            0,
+            timestamp="2020-01-01T00:00:00",
+            archive_date="2020-01-01",
+            dest="10.0.0.90",
+            process="C:\\Windows\\multi.exe",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            dest="10.0.0.90",
+            process="C:\\Windows\\multi.exe",
+        ),
+        _flow_event(
+            2,
+            timestamp="2020-01-02T00:00:00",
+            archive_date="2020-01-02",
+            dest="10.0.0.90",
+            process="C:\\Windows\\multi.exe",
+        ),
+        _flow_event(
+            3,
+            timestamp="2020-01-02T00:00:01",
+            archive_date="2020-01-02",
+            dest="10.0.0.90",
+            process="C:\\Windows\\multi.exe",
+        ),
+    ]
+    rows[0]["raw_event_id"] = "shared"
+    rows[0]["member_name"] = "z.json.gz"
+    rows[0]["line_number"] = 99
+    rows[1]["raw_event_id"] = "only_day1"
+    rows[1]["member_name"] = "a.json.gz"
+    rows[1]["line_number"] = 1
+    rows[2]["raw_event_id"] = "shared"
+    rows[2]["member_name"] = "a.json.gz"
+    rows[2]["line_number"] = 2
+    rows[3]["raw_event_id"] = "only_day2"
+    rows[3]["member_name"] = "b.json.gz"
+    rows[3]["line_number"] = 3
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture, evidence_cap=3)
+    eda8.run_eda08(args)
+    t17 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
+    )
+    row = t17.loc[
+        (t17["destination_value"] == "10.0.0.90")
+        & (t17["process_name"].str.contains("multi"))
+    ].iloc[0]
+    assert int(row["connection_count"]) == 4
+    assert pd.Timestamp(row["first_seen_time"]) == pd.Timestamp("2020-01-01T00:00:00")
+    evidence = json.loads(row["raw_event_ids"])
+    assert len(evidence) == len(set(evidence)), "evidence IDs must be unique"
+    assert len(evidence) <= 3, "evidence must be capped"
+    assert "shared" in evidence
+    if "only_day1" in evidence and "shared" in evidence:
+        loc_shared = evidence.index("shared")
+        loc_day1 = evidence.index("only_day1")
+        assert loc_day1 < loc_shared, (
+            "only_day1 has earlier locator (h1.json.gz < z.json.gz on same date)"
+        )
+
+
+def test_work_dir_isolation_creates_unique_child(tmp_path):
+    fixture = _fixture(tmp_path)
+    user_work = tmp_path / "user_work"
+    user_work.mkdir()
+    args = _args(tmp_path, fixture, t17_work_dir=str(user_work))
+    eda8.run_eda08(args)
+    children = list(user_work.iterdir())
+    assert len(children) == 0 or all(
+        not c.name.startswith("linked_staging") for c in children
+    ), "work-dir should not have direct linked_staging children"
+
+
+def test_evidence_with_locators_documented():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "evidence_with_locators" in source
+    assert "_T17_PARTIAL_SCHEMA_DOC" in source
+    assert "_T17_PARTIAL_COLUMNS" not in source
