@@ -207,6 +207,14 @@ def build_parser() -> argparse.ArgumentParser:
             "counts and exit without building T16/T17/F9/F10 or publishing."
         ),
     )
+    parser.add_argument(
+        "--t17-probe-only",
+        action="store_true",
+        help=(
+            "Build inventories, cascade, T16, and bounded T17 only; print "
+            "summary metrics and exit without F9/F10 or publishing."
+        ),
+    )
     return parser
 
 
@@ -305,7 +313,8 @@ def validate_run_config(args: argparse.Namespace) -> dict[str, Any]:
         if _looks_like_drive(spill):
             raise CacheAuditError("Google Drive spill paths are refused")
     cascade_probe_only = bool(getattr(args, "cascade_probe_only", False))
-    if not cascade_probe_only:
+    t17_probe_only = bool(getattr(args, "t17_probe_only", False))
+    if not cascade_probe_only and not t17_probe_only:
         _validate_output_dir(output_dir, cache_dir)
     cache_metadata = eda5._load_cache_metadata(cache_dir)
     policy = load_eda8_period_policy(period_map)
@@ -1295,13 +1304,29 @@ def build_t16(connection) -> Any:
 
 
 
-def build_t17(connection, evidence_cap: int) -> Any:
+T17_ALLOWED_CATEGORIES = (
+    "loopback",
+    "internal-looking",
+    "external-looking",
+    "multicast_or_broadcast",
+    "missing",
+    "invalid_or_unresolved",
+)
+
+
+def build_t17(
+    connection,
+    evidence_cap: int,
+    *,
+    on_behavior_aggregate: Optional[Any] = None,
+    on_bounded_evidence: Optional[Any] = None,
+) -> dict[str, Any]:
     cap = int(evidence_cap)
     connection.execute(
         f"""
-        CREATE TEMP TABLE t17_behavior_counts AS
+        CREATE TEMP TABLE t17_behavior_aggregate AS
         SELECT
-            period_role AS period,
+            period_role,
             host_id,
             process_name,
             destination_value,
@@ -1309,22 +1334,78 @@ def build_t17(connection, evidence_cap: int) -> Any:
             port,
             protocol,
             COUNT(*)::BIGINT AS connection_count,
-            MIN(event_time) AS first_seen_time
+            MIN(event_time) AS first_seen_time,
+            arg_min(
+                struct_pack(
+                    raw_event_id := raw_event_id,
+                    event_locator := event_locator
+                ),
+                event_locator,
+                {cap}
+            ) FILTER (WHERE COALESCE(raw_event_id, '') <> '')
+                AS bounded_evidence_candidates
         FROM linked_flows
         GROUP BY 1, 2, 3, 4, 5, 6, 7
         """
     )
+    if on_behavior_aggregate is not None:
+        on_behavior_aggregate()
     connection.execute(
         """
         CREATE TEMP TABLE t17_benign_behavior_keys AS
         SELECT DISTINCT host_id, process_name, destination_value, port
-        FROM linked_flows
+        FROM t17_behavior_aggregate
         WHERE period_role = 'verified_benign'
         """
     )
     connection.execute(
-        """
-        CREATE TEMP TABLE t17_unique_evidence AS
+        f"""
+        CREATE TEMP TABLE t17_bounded_evidence AS
+        WITH unnested AS (
+            SELECT
+                ba.period_role,
+                ba.host_id,
+                ba.process_name,
+                ba.destination_value,
+                ba.destination_category,
+                ba.port,
+                ba.protocol,
+                elem.raw_event_id AS raw_event_id,
+                elem.event_locator AS event_locator
+            FROM t17_behavior_aggregate ba,
+            LATERAL UNNEST(ba.bounded_evidence_candidates) AS u(elem)
+            WHERE COALESCE(elem.raw_event_id, '') <> ''
+        ),
+        deduped AS (
+            SELECT
+                period_role,
+                host_id,
+                process_name,
+                destination_value,
+                destination_category,
+                port,
+                protocol,
+                raw_event_id,
+                MIN(event_locator) AS earliest_event_locator
+            FROM unnested
+            GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
+        ),
+        ranked AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        period_role,
+                        host_id,
+                        process_name,
+                        destination_value,
+                        destination_category,
+                        port,
+                        protocol
+                    ORDER BY earliest_event_locator, raw_event_id
+                ) AS evidence_rank
+            FROM deduped
+        )
         SELECT
             period_role,
             host_id,
@@ -1334,38 +1415,13 @@ def build_t17(connection, evidence_cap: int) -> Any:
             port,
             protocol,
             raw_event_id,
-            MIN(event_locator) AS earliest_event_locator
-        FROM linked_flows
-        WHERE COALESCE(raw_event_id, '') <> ''
-        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
-        """
-    )
-    connection.execute(
-        """
-        CREATE TEMP TABLE t17_ranked_evidence AS
-        SELECT
-            *,
-            ROW_NUMBER() OVER (
-                PARTITION BY
-                    period_role,
-                    host_id,
-                    process_name,
-                    destination_value,
-                    port,
-                    protocol
-                ORDER BY earliest_event_locator, raw_event_id
-            ) AS evidence_rank
-        FROM t17_unique_evidence
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE TEMP TABLE t17_bounded_evidence AS
-        SELECT *
-        FROM t17_ranked_evidence
+            earliest_event_locator
+        FROM ranked
         WHERE evidence_rank <= {cap}
         """
     )
+    if on_bounded_evidence is not None:
+        on_bounded_evidence()
     connection.execute(
         """
         CREATE TEMP TABLE t17_evidence_lists AS
@@ -1374,59 +1430,180 @@ def build_t17(connection, evidence_cap: int) -> Any:
             host_id,
             process_name,
             destination_value,
+            destination_category,
             port,
             protocol,
             to_json(
                 list(raw_event_id ORDER BY earliest_event_locator, raw_event_id)
             ) AS raw_event_ids
         FROM t17_bounded_evidence
-        GROUP BY 1, 2, 3, 4, 5, 6
+        GROUP BY 1, 2, 3, 4, 5, 6, 7
         """
     )
-    frame = _query_frame(
-        connection,
+    connection.execute(
         """
+        CREATE TEMP TABLE t17_final AS
         SELECT
-            bc.period,
-            bc.host_id,
-            bc.process_name,
-            bc.destination_value,
-            bc.destination_category,
-            bc.port,
-            bc.protocol,
-            bc.connection_count,
-            bc.first_seen_time,
+            ba.period_role AS period,
+            ba.host_id,
+            ba.process_name,
+            ba.destination_value,
+            ba.destination_category,
+            ba.port,
+            ba.protocol,
+            ba.connection_count,
+            ba.first_seen_time,
             CASE WHEN b.host_id IS NOT NULL THEN 'yes' ELSE 'no' END
                 AS benign_seen_before_yes_no,
             COALESCE(el.raw_event_ids, '[]') AS raw_event_ids
-        FROM t17_behavior_counts bc
+        FROM t17_behavior_aggregate ba
         LEFT JOIN t17_benign_behavior_keys b
-          ON b.host_id = bc.host_id
-         AND b.process_name = bc.process_name
-         AND b.destination_value = bc.destination_value
-         AND b.port = bc.port
+          ON b.host_id = ba.host_id
+         AND b.process_name = ba.process_name
+         AND b.destination_value = ba.destination_value
+         AND b.port = ba.port
         LEFT JOIN t17_evidence_lists el
-          ON el.period_role = bc.period
-         AND el.host_id = bc.host_id
-         AND el.process_name = bc.process_name
-         AND el.destination_value = bc.destination_value
-         AND el.port = bc.port
-         AND el.protocol = bc.protocol
-        ORDER BY
-            bc.period,
-            bc.host_id,
-            bc.process_name,
-            bc.destination_value,
-            bc.port,
-            bc.protocol,
-            bc.first_seen_time
-        """,
+          ON el.period_role = ba.period_role
+         AND el.host_id = ba.host_id
+         AND el.process_name = ba.process_name
+         AND el.destination_value = ba.destination_value
+         AND el.destination_category = ba.destination_category
+         AND el.port = ba.port
+         AND el.protocol = ba.protocol
+        """
     )
-    if frame.empty:
-        import pandas as pd
+    return validate_t17_in_duckdb(connection, cap)
 
-        return pd.DataFrame(columns=T17_COLUMNS)
-    return frame[T17_COLUMNS]
+
+def validate_t17_in_duckdb(connection, evidence_cap: int) -> dict[str, Any]:
+    cap = int(evidence_cap)
+    columns = [
+        str(row[0])
+        for row in connection.execute("DESCRIBE t17_final").fetchall()
+    ]
+    if columns != T17_COLUMNS:
+        raise CacheAuditError("T17 schema mismatch")
+    row_count = int(connection.execute("SELECT COUNT(*) FROM t17_final").fetchone()[0])
+    if row_count > 0:
+        invalid_counts = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM t17_final WHERE connection_count <= 0"
+            ).fetchone()[0]
+        )
+        if invalid_counts:
+            raise CacheAuditError("T17 connection_count must be > 0")
+        null_first_seen = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM t17_final WHERE first_seen_time IS NULL"
+            ).fetchone()[0]
+        )
+        if null_first_seen:
+            raise CacheAuditError("T17 first_seen_time must be nonnull")
+        invalid_benign = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM t17_final
+                WHERE benign_seen_before_yes_no NOT IN ('yes', 'no')
+                """
+            ).fetchone()[0]
+        )
+        if invalid_benign:
+            raise CacheAuditError(
+                "T17 benign_seen_before_yes_no must contain only yes/no"
+            )
+        allowed = ", ".join(f"'{value}'" for value in T17_ALLOWED_CATEGORIES)
+        invalid_categories = int(
+            connection.execute(
+                f"""
+                SELECT COUNT(*) FROM t17_final
+                WHERE destination_category NOT IN ({allowed})
+                """
+            ).fetchone()[0]
+        )
+        if invalid_categories:
+            raise CacheAuditError("T17 destination_category contains invalid values")
+        invalid_json = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM t17_final
+                WHERE NOT json_valid(raw_event_ids)
+                """
+            ).fetchone()[0]
+        )
+        if invalid_json:
+            raise CacheAuditError("T17 raw_event_ids must be valid JSON arrays")
+        over_cap = int(
+            connection.execute(
+                f"""
+                SELECT COUNT(*) FROM t17_final
+                WHERE json_array_length(raw_event_ids::JSON) > {cap}
+                """
+            ).fetchone()[0]
+        )
+        if over_cap:
+            raise CacheAuditError(
+                f"T17 evidence arrays must contain at most {cap} IDs"
+            )
+        empty_ids = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM (
+                    SELECT UNNEST(
+                        from_json(raw_event_ids, '["VARCHAR"]')
+                    ) AS event_id
+                    FROM t17_final
+                )
+                WHERE COALESCE(event_id, '') = ''
+                """
+            ).fetchone()[0]
+        )
+        if empty_ids:
+            raise CacheAuditError("T17 evidence arrays must not contain empty IDs")
+    max_evidence = int(
+        connection.execute(
+            """
+            SELECT COALESCE(MAX(json_array_length(raw_event_ids::JSON)), 0)
+            FROM t17_final
+            """
+        ).fetchone()[0]
+    )
+    missing_evidence = int(
+        connection.execute(
+            """
+            SELECT COUNT(*) FROM t17_final
+            WHERE COALESCE(raw_event_ids, '[]') = '[]'
+            """
+        ).fetchone()[0]
+    )
+    return {
+        "t17_row_count": row_count,
+        "t17_evidence_max_count": max_evidence,
+        "t17_missing_evidence_row_count": missing_evidence,
+    }
+
+
+def _export_t17_csv(connection, path: pathlib.Path) -> None:
+    temp = path.with_suffix(path.suffix + f".{uuid.uuid4().hex}.tmp")
+    escaped = str(temp).replace("'", "''")
+    columns = ", ".join(T17_COLUMNS)
+    connection.execute(
+        f"""
+        COPY (
+            SELECT {columns}
+            FROM t17_final
+            ORDER BY
+                period,
+                host_id,
+                process_name,
+                destination_value,
+                port,
+                protocol,
+                first_seen_time
+        ) TO '{escaped}'
+        (HEADER, FORMAT CSV)
+        """
+    )
+    os.replace(temp, path)
 
 
 def build_f9_data(connection) -> Any:
@@ -1484,7 +1661,7 @@ def build_f9_data(connection) -> Any:
                         THEN ef.destination_value
                     END
                 )::BIGINT AS novel_destination_count,
-                COUNT(DISTINCT ef.event_locator)::BIGINT AS flow_count
+                COUNT(*)::BIGINT AS flow_count
             FROM eval_flows ef
             JOIN dest_first_seen dfs
               ON dfs.host_id = ef.host_id
@@ -1741,11 +1918,17 @@ def create_f10(
     plt.close(figure)
 
 
-def validate_outputs(t16, t17, f10_data) -> None:
+def validate_outputs(t16, t17_summary: Optional[dict[str, Any]], f10_data) -> None:
     if list(t16.columns) != T16_COLUMNS:
         raise CacheAuditError("T16 schema mismatch")
-    if list(t17.columns) != T17_COLUMNS:
-        raise CacheAuditError("T17 schema mismatch")
+    if t17_summary is not None:
+        required = {
+            "t17_row_count",
+            "t17_evidence_max_count",
+            "t17_missing_evidence_row_count",
+        }
+        if not required.issubset(t17_summary):
+            raise CacheAuditError("T17 summary object is incomplete")
     if not t16.empty:
         if t16["date_label"].isna().any() or t16["host_id"].isna().any():
             raise CacheAuditError("T16 requires date_label and host_id")
@@ -1766,19 +1949,7 @@ def validate_outputs(t16, t17, f10_data) -> None:
                 raise CacheAuditError("T16 unmatched rows must have zero ambiguity")
             if (unmatched_rows["match_rate_percent"] != 0).any():
                 raise CacheAuditError("T16 unmatched rows must have zero match rate")
-    allowed_categories = {
-        "loopback",
-        "internal-looking",
-        "external-looking",
-        "multicast_or_broadcast",
-        "missing",
-        "invalid_or_unresolved",
-    }
-    if not t17.empty and not set(t17["destination_category"]).issubset(
-        allowed_categories
-    ):
-        raise CacheAuditError("T17 destination_category contains invalid values")
-    if not f10_data.empty:
+    if f10_data is not None and not f10_data.empty:
         counts = list(f10_data[F10_VALUE_COLUMN])
         if counts != sorted(counts):
             raise CacheAuditError("F10 cumulative counts must be non-decreasing")
@@ -1911,9 +2082,15 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
     staging: Optional[pathlib.Path] = None
     execution_log: list[str] = []
     cascade_probe_only = bool(getattr(args, "cascade_probe_only", False))
+    t17_probe_only = bool(getattr(args, "t17_probe_only", False))
 
     def stage(number: int, message: str) -> None:
         line = f"[STAGE {number}/7] {message}"
+        execution_log.append(line)
+        print(line, flush=True)
+
+    def substage(label: str, message: str) -> None:
+        line = f"[STAGE {label}/7] {message}"
         execution_log.append(line)
         print(line, flush=True)
 
@@ -1985,10 +2162,52 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
             }
 
         t16 = build_t16(connection)
-        t17 = build_t17(connection, config["evidence_cap"])
+        substage("4A", "T16 constructed")
+        t17_summary = build_t17(
+            connection,
+            config["evidence_cap"],
+            on_behavior_aggregate=lambda: substage(
+                "4B", "T17 behavior aggregation complete"
+            ),
+            on_bounded_evidence=lambda: substage(
+                "4C", "T17 bounded evidence complete"
+            ),
+        )
+
+        if t17_probe_only:
+            elapsed = time.perf_counter() - started
+            peak_rss = _peak_rss_bytes()
+            print("EDA 8 T17 probe reconciliation:", flush=True)
+            print(f"  t16_row_count={int(len(t16))}", flush=True)
+            print(f"  t17_row_count={t17_summary['t17_row_count']}", flush=True)
+            print(
+                "  t17_evidence_max_count="
+                f"{t17_summary['t17_evidence_max_count']}",
+                flush=True,
+            )
+            print(
+                f"  linked_flow_count={cascade_stats['linked_flow_count']}",
+                flush=True,
+            )
+            print(f"  elapsed_seconds={elapsed:.3f}", flush=True)
+            if peak_rss is not None:
+                print(f"  peak_rss_bytes={peak_rss}", flush=True)
+            return {
+                "t17_probe_only": True,
+                "runtime_seconds": round(elapsed, 3),
+                "peak_rss_bytes": peak_rss,
+                "t16_row_count": int(len(t16)),
+                **t17_summary,
+                **cascade_stats,
+                **period_stats,
+            }
+
         f9_data = build_f9_data(connection)
+        substage("4D", "F9 data constructed")
         f10_data = build_f10_data(connection)
-        validate_outputs(t16, t17, f10_data)
+        substage("4E", "F10 data constructed")
+        validate_outputs(t16, t17_summary, f10_data)
+        substage("4F", "post-cascade outputs validated")
         stage(4, "T16/T17 and F9/F10 data constructed and validated")
 
         host_labels = _host_label_map(connection)
@@ -1997,7 +2216,7 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
             tempfile.mkdtemp(prefix=".eda08_staging_", dir=str(parent))
         )
         _atomic_write_csv(t16, staging / "T16_endpoint_network_pivot_success.csv")
-        _atomic_write_csv(t17, staging / "T17_process_to_destination_behavior.csv")
+        _export_t17_csv(connection, staging / "T17_process_to_destination_behavior.csv")
         create_f9(
             f9_data,
             png_path=staging / "F9_destination_novelty_over_time.png",
@@ -2050,7 +2269,11 @@ def run_eda08(args: argparse.Namespace) -> dict[str, Any]:
             "pid_ambiguous_mappings": cascade_stats["pid_ambiguous_mappings"],
             "linked_flow_count": cascade_stats["linked_flow_count"],
             "t16_row_count": int(len(t16)),
-            "t17_row_count": int(len(t17)),
+            "t17_row_count": int(t17_summary["t17_row_count"]),
+            "t17_evidence_max_count": int(t17_summary["t17_evidence_max_count"]),
+            "t17_missing_evidence_row_count": int(
+                t17_summary["t17_missing_evidence_row_count"]
+            ),
             "f9_host_minute_count": int(len(f9_data)),
             "f10_cumulative_counts": {
                 str(int(row.lag_minutes)): int(
@@ -2122,6 +2345,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     if metadata.get("cascade_probe_only"):
         print("EDA 8 cascade probe complete", flush=True)
+        return 0
+    if metadata.get("t17_probe_only"):
+        print("EDA 8 T17 probe complete", flush=True)
         return 0
     print(
         "EDA 8 complete: "

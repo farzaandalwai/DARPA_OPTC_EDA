@@ -301,6 +301,7 @@ def _args(root: pathlib.Path, fixture: dict, **overrides) -> argparse.Namespace:
         "duckdb_temp_dir": None,
         "duckdb_threads": 2,
         "cascade_probe_only": False,
+        "t17_probe_only": False,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -1009,8 +1010,13 @@ _query_frame(
 
 def test_t17_aggregation_occurs_in_duckdb():
     source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
-    assert "CREATE TEMP TABLE t17_behavior_counts" in source
+    assert "CREATE TEMP TABLE t17_behavior_aggregate" in source
+    assert "arg_min(" in source
+    assert "bounded_evidence_candidates" in source
     assert "CREATE TEMP TABLE t17_bounded_evidence" in source
+    assert "CREATE TEMP TABLE t17_final" in source
+    assert "CREATE TEMP TABLE t17_unique_evidence" not in source
+    assert "CREATE TEMP TABLE t17_ranked_evidence" not in source
     assert "list_slice(list(all evidence" not in source.lower()
 
 
@@ -1068,6 +1074,8 @@ def test_execution_log_contains_all_seven_stages(completed_run):
     log = (output / "eda08_execution.log").read_text(encoding="utf-8")
     for stage in range(1, 8):
         assert f"[STAGE {stage}/7]" in log
+    for substage in ("4A", "4B", "4C", "4D", "4E", "4F"):
+        assert f"[STAGE {substage}/7]" in log
     assert "published deliverables" not in log.lower()
     assert "staging validated and ready for atomic publication" in log
 
@@ -1683,3 +1691,122 @@ def test_f10_destination_lag_join_bounded_to_sixty_minutes():
     assert "dest_novelty_events" in source
     assert "process_inventory" in source
     assert "flow_inventory" in source
+
+
+def test_t17_rejects_unbounded_evidence_tables():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "CREATE TEMP TABLE t17_unique_evidence" not in source
+    assert "CREATE TEMP TABLE t17_ranked_evidence" not in source
+    assert "FROM t17_unique_evidence" not in source
+    assert "FROM t17_ranked_evidence" not in source
+
+
+def test_t17_rejects_row_number_over_linked_flows_evidence():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def build_t17(")
+    end = source.index("\ndef validate_t17_in_duckdb(")
+    body = source[start:end]
+    assert "ROW_NUMBER() OVER" in body
+    assert "FROM linked_flows" not in body.split("ROW_NUMBER() OVER", 1)[1]
+
+
+def test_t17_not_fetched_into_pandas():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def build_t17(")
+    end = source.index("\ndef validate_t17_in_duckdb(")
+    body = source[start:end]
+    assert "_query_frame(" not in body
+    assert "fetchdf(" not in body
+    assert ".df(" not in body
+    assert "fetchall(" not in body
+
+
+def test_t17_exported_with_duckdb_copy():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "def _export_t17_csv(" in source
+    assert "COPY (" in source
+    assert "FROM t17_final" in source
+    assert "_export_t17_csv(connection" in source
+
+
+def test_t17_validation_runs_inside_duckdb():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "def validate_t17_in_duckdb(" in source
+    assert "DESCRIBE t17_final" in source
+    assert "json_valid(raw_event_ids)" in source
+    start = source.index("def validate_t17_in_duckdb(")
+    end = source.index("\ndef _export_t17_csv(")
+    body = source[start:end]
+    assert "fetchdf(" not in body
+
+
+def test_t17_bounded_aggregate_during_behavior_aggregation():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "CREATE TEMP TABLE t17_behavior_aggregate" in source
+    assert "arg_min(" in source
+    assert "bounded_evidence_candidates" in source
+    assert "FROM linked_flows" in source.split("t17_behavior_aggregate", 1)[1]
+
+
+def test_t17_benign_keys_derived_from_behavior_aggregate():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    assert "FROM t17_behavior_aggregate" in source
+    assert (
+        "FROM linked_flows\n        WHERE period_role = 'verified_benign'"
+        not in source
+    )
+
+
+def test_f9_uses_count_star_not_distinct_event_locator():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def build_f9_data(")
+    end = source.index("\ndef build_f10_data(")
+    body = source[start:end]
+    assert "COUNT(*)::BIGINT AS flow_count" in body
+    assert "COUNT(DISTINCT ef.event_locator)" not in body
+
+
+def test_t17_probe_only_creates_no_output_directory(tmp_path):
+    fixture = _fixture(tmp_path)
+    out = tmp_path / "t17_probe_out"
+    args = _args(tmp_path, fixture, output_dir=str(out), t17_probe_only=True)
+    args.t17_probe_only = True
+    metadata = eda8.run_eda08(args)
+    assert metadata["t17_probe_only"] is True
+    assert not out.exists()
+    assert metadata["t16_row_count"] >= 0
+    assert metadata["t17_row_count"] >= 0
+    assert metadata["linked_flow_count"] >= 0
+
+
+def test_t17_evidence_candidates_bounded_by_cap(tmp_path):
+    rows = []
+    for index in range(25):
+        rows.append(
+            _flow_event(
+                index,
+                timestamp=f"2020-01-01T00:00:{index:02d}",
+                archive_date="2020-01-01",
+                dest="10.0.0.60",
+                process="C:\\Windows\\many.exe",
+            )
+        )
+    fixture = _fixture(tmp_path, rows)
+    args = _args(tmp_path, fixture, evidence_cap=5)
+    metadata = eda8.run_eda08(args)
+    assert metadata["t17_evidence_max_count"] <= 5
+    t17 = pd.read_csv(
+        pathlib.Path(args.output_dir) / "T17_process_to_destination_behavior.csv"
+    )
+    evidence = json.loads(t17.iloc[0]["raw_event_ids"])
+    assert len(evidence) == 5
+    assert len(evidence) == len(set(evidence))
+
+
+def test_t17_rejects_unbounded_list_aggregation_before_cap():
+    source = pathlib.Path(eda8.__file__).read_text(encoding="utf-8")
+    start = source.index("def build_t17(")
+    end = source.index("\ndef validate_t17_in_duckdb(")
+    body = source[start:end]
+    assert "list(" not in body.split("bounded_evidence_candidates", 1)[0]
+    assert "list_slice(" not in body
