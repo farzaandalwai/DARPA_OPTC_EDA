@@ -534,6 +534,7 @@ def test_probe_process_semantics_publishes_nothing(tmp_path):
     summary = eda9.run_eda09(args)
     assert "process_action_vocabulary" in summary
     assert "missing_uuid_rates" in summary
+    assert "later_actor_equals_earlier_object_rate_by_process_action" in summary
     assert not pathlib.Path(args.output_dir).exists()
 
 
@@ -690,6 +691,71 @@ def test_probe_ppid_match_from_earlier_non_process_event(tmp_path):
     assert ppid_diag["denominator"] == 1
     assert ppid_diag["numerator"] == 1
     assert ppid_diag["rate"] == 1.0
+
+
+def test_probe_action_specific_later_actor_rates(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            actor_uuid="proc-a",
+            object_uuid="obj-create",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:02",
+            archive_date="2020-01-01",
+            action="OPEN",
+            actor_uuid="proc-b",
+            object_uuid="obj-open",
+        ),
+        _file_event(
+            2,
+            timestamp="2020-01-01T00:00:03",
+            archive_date="2020-01-01",
+            actor_uuid="obj-create",
+        ),
+        _flow_event(
+            3,
+            timestamp="2020-01-01T00:00:04",
+            archive_date="2020-01-01",
+            actor_uuid="obj-open",
+        ),
+    ]
+    summary = _run_probe(tmp_path, rows)
+    by_action = summary["later_actor_equals_earlier_object_rate_by_process_action"]
+    assert by_action["CREATE"]["numerator"] == 1
+    assert by_action["OPEN"]["numerator"] == 1
+    assert by_action["TERMINATE"]["numerator"] == 0
+    assert by_action["CREATE"]["denominator"] == 2
+    assert by_action["OPEN"]["denominator"] == 2
+    assert by_action["TERMINATE"]["denominator"] == 2
+
+
+def test_probe_action_specific_equal_timestamp_not_earlier(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            actor_uuid="proc-a",
+            object_uuid="same-ts-create",
+        ),
+        _file_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            actor_uuid="same-ts-create",
+        ),
+    ]
+    summary = _run_probe(tmp_path, rows)
+    by_action = summary["later_actor_equals_earlier_object_rate_by_process_action"]
+    assert by_action["CREATE"]["denominator"] == 1
+    assert by_action["CREATE"]["numerator"] == 0
+    assert by_action["CREATE"]["rate"] == 0.0
 
 
 def test_probe_source_does_not_accumulate_all_rows_list():

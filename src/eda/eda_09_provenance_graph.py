@@ -850,6 +850,7 @@ def _projection_reader(connection, config: dict[str, Any]):
 
 
 def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, Any]:
+    target_actions = ("CREATE", "OPEN", "TERMINATE")
     by_actor_images: dict[str, set[str]] = defaultdict(set)
     by_object_images: dict[str, set[str]] = defaultdict(set)
     by_actor_pid: dict[str, set[str]] = defaultdict(set)
@@ -861,7 +862,10 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
 
     process_object_ids_seen: set[str] = set()
     process_object_ids_pending_same_time: set[str] = set()
+    process_object_ids_seen_by_action: dict[str, set[str]] = defaultdict(set)
+    process_object_ids_pending_same_time_by_action: dict[str, set[str]] = defaultdict(set)
     actor_matches_prior_object = 0
+    actor_matches_prior_object_by_action: Counter[str] = Counter()
     actor_total_file_flow_nonempty = 0
     action_counts: Counter[str] = Counter()
     missing_actor_uuid = 0
@@ -873,6 +877,10 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
         if process_object_ids_pending_same_time:
             process_object_ids_seen.update(process_object_ids_pending_same_time)
             process_object_ids_pending_same_time.clear()
+        if process_object_ids_pending_same_time_by_action:
+            for action_name, object_ids in process_object_ids_pending_same_time_by_action.items():
+                process_object_ids_seen_by_action[action_name].update(object_ids)
+            process_object_ids_pending_same_time_by_action.clear()
         if actor_pid_pending_same_time:
             for actor_id, pid_values in actor_pid_pending_same_time.items():
                 actor_seen_pid[actor_id].update(pid_values)
@@ -898,6 +906,9 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
                 actor_total_file_flow_nonempty += 1
                 if actor in process_object_ids_seen:
                     actor_matches_prior_object += 1
+                for action_name in process_object_ids_seen_by_action:
+                    if actor in process_object_ids_seen_by_action[action_name]:
+                        actor_matches_prior_object_by_action[action_name] += 1
 
             # Learn actor->pid from all event types, but strictly from earlier timestamps.
             if actor and pid:
@@ -905,7 +916,8 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
 
             if object_type == "PROCESS":
                 process_rows_scanned += 1
-                action_counts[row.get("action_raw", "").strip() or "<MISSING>"] += 1
+                action_name = row.get("action_raw", "").strip().upper() or "<MISSING>"
+                action_counts[action_name] += 1
                 image = row.get("image_path_raw", "").strip()
                 ppid = row.get("ppid_raw", "").strip()
                 if not actor:
@@ -926,6 +938,7 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
                         ppid_matches += 1
                 if object_id:
                     process_object_ids_pending_same_time.add(object_id)
+                    process_object_ids_pending_same_time_by_action[action_name].add(object_id)
 
     _flush_same_timestamp_state()
 
@@ -963,6 +976,19 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
                 if actor_total_file_flow_nonempty
                 else 0.0
             ),
+        },
+        "later_actor_equals_earlier_object_rate_by_process_action": {
+            action_name: {
+                "numerator": int(actor_matches_prior_object_by_action.get(action_name, 0)),
+                "denominator": int(actor_total_file_flow_nonempty),
+                "rate": (
+                    float(actor_matches_prior_object_by_action.get(action_name, 0))
+                    / float(actor_total_file_flow_nonempty)
+                    if actor_total_file_flow_nonempty
+                    else 0.0
+                ),
+            }
+            for action_name in sorted(set(action_counts) | set(target_actions))
         },
         "process_action_vocabulary": dict(sorted(action_counts.items())),
         "missing_uuid_rates": {
