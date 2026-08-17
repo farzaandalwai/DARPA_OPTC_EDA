@@ -240,7 +240,6 @@ def _args(root: pathlib.Path, fixture: dict, **overrides) -> argparse.Namespace:
         "manifest_csv": None,
         "process_instance_key": "uuid",
         "probe_process_semantics": False,
-        "process_create_actions": "",
         "batch_size": 2,
         "duckdb_memory_limit": "1GB",
         "duckdb_temp_dir": None,
@@ -290,6 +289,333 @@ def test_process_creation_edge(completed_run):
     assert row["destination_type"] == "PROCESS"
     assert row["source_instance_source"] in {"uuid", "provisional_fallback"}
     assert row["destination_instance_source"] in {"uuid", "provisional_fallback"}
+
+
+def test_open_and_terminate_do_not_emit_process_created_process(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="OPEN",
+            actor_uuid="a-open",
+            object_uuid="o-open",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:02",
+            archive_date="2020-01-01",
+            action="TERMINATE",
+            actor_uuid="a-term",
+            object_uuid="o-term",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    assert not (edges["relation"] == "process_created_process").any()
+
+
+def test_parent_process_does_not_inherit_child_image_path(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            image="C:\\Windows\\child-x.exe",
+            parent="C:\\Windows\\parent-x.exe",
+            actor_uuid="parent-uuid",
+            object_uuid="child-uuid",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    nodes = _load_nodes(pathlib.Path(args.output_dir))
+    creation = edges.loc[edges["relation"] == "process_created_process"].iloc[0]
+    parent_node = nodes.loc[nodes["node_id"] == creation["source_id"]].iloc[0]
+    child_node = nodes.loc[nodes["node_id"] == creation["destination_id"]].iloc[0]
+    assert parent_node["image_path_raw"] == "C:\\Windows\\parent-x.exe"
+    assert child_node["image_path_raw"] == "C:\\Windows\\child-x.exe"
+
+
+def test_create_missing_parent_path_does_not_assign_child_path_to_parent(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="",
+            image="C:\\Windows\\child-only.exe",
+            actor_uuid="parent-missing-path",
+            object_uuid="child-with-path",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    nodes = _load_nodes(pathlib.Path(args.output_dir))
+    creation = edges.loc[edges["relation"] == "process_created_process"].iloc[0]
+    parent_node = nodes.loc[nodes["node_id"] == creation["source_id"]].iloc[0]
+    child_node = nodes.loc[nodes["node_id"] == creation["destination_id"]].iloc[0]
+    assert parent_node["image_path_raw"] == ""
+    assert child_node["image_path_raw"] == "C:\\Windows\\child-only.exe"
+
+
+def test_create_parent_event_count_not_double_incremented(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="C:\\Windows\\parent-once.exe",
+            image="C:\\Windows\\child-once.exe",
+            actor_uuid="parent-once-uuid",
+            object_uuid="child-once-uuid",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    nodes = _load_nodes(pathlib.Path(args.output_dir))
+    creation = edges.loc[edges["relation"] == "process_created_process"].iloc[0]
+    parent_node = nodes.loc[nodes["node_id"] == creation["source_id"]].iloc[0]
+    assert int(parent_node["event_count"]) == 1
+
+
+def test_uuid_identity_resolution_on_create_edge(completed_run):
+    _fixture, _args_ns, _meta, output_dir = completed_run
+    edges = _load_edges(output_dir)
+    creation = edges.loc[edges["relation"] == "process_created_process"].iloc[0]
+    assert creation["source_instance_source"] == "uuid"
+    assert creation["destination_instance_source"] == "uuid"
+
+
+def test_create_edge_emits_with_missing_parent_path_when_uuids_present(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="",
+            image="C:\\Windows\\child-only.exe",
+            actor_uuid="parent-u",
+            object_uuid="child-u",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    creation = edges.loc[edges["relation"] == "process_created_process"]
+    assert len(creation) == 1
+    row = creation.iloc[0]
+    assert row["source_instance_source"] == "uuid"
+    assert row["destination_instance_source"] == "uuid"
+
+
+def test_create_edge_emits_with_missing_child_path_when_uuids_present(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="C:\\Windows\\parent-only.exe",
+            image="",
+            actor_uuid="parent-u2",
+            object_uuid="child-u2",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    creation = edges.loc[edges["relation"] == "process_created_process"]
+    assert len(creation) == 1
+    row = creation.iloc[0]
+    assert row["source_instance_source"] == "uuid"
+    assert row["destination_instance_source"] == "uuid"
+
+
+def test_create_with_no_uuid_and_no_fallback_evidence_skips_bogus_provisional(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="",
+            image="",
+            command="",
+            pid="",
+            ppid="",
+            actor_uuid="",
+            object_uuid="",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    nodes = _load_nodes(pathlib.Path(args.output_dir))
+    assert not (edges["relation"] == "process_created_process").any()
+    process_nodes = nodes.loc[nodes["node_type"] == "PROCESS"]
+    assert process_nodes.empty
+
+
+def test_create_with_resolvable_child_and_unresolved_parent_keeps_child_host_edge(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="",
+            image="C:\\Windows\\child-only-uuid.exe",
+            command="child-only-cmd --run",
+            pid="4321",
+            ppid="",
+            actor_uuid="",
+            object_uuid="child-resolvable-uuid",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    nodes = _load_nodes(pathlib.Path(args.output_dir))
+    child_nodes = nodes.loc[
+        (nodes["node_type"] == "PROCESS")
+        & (nodes["process_instance_uuid"] == "child-resolvable-uuid")
+    ]
+    assert len(child_nodes) == 1
+    child_id = child_nodes.iloc[0]["node_id"]
+    assert not (edges["relation"] == "process_created_process").any()
+    host_child = edges.loc[
+        (edges["relation"] == "host_observed_process_instance")
+        & (edges["destination_id"] == child_id)
+    ]
+    assert len(host_child) == 1
+
+
+def test_create_child_command_retained_when_path_missing(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="C:\\Windows\\parent-cmd.exe",
+            image="",
+            command="cmd-without-path --arg",
+            pid="2222",
+            ppid="1111",
+            actor_uuid="parent-cmd-uuid",
+            object_uuid="child-cmd-uuid",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    nodes = _load_nodes(pathlib.Path(args.output_dir))
+    child_nodes = nodes.loc[
+        (nodes["node_type"] == "PROCESS")
+        & (nodes["process_instance_uuid"] == "child-cmd-uuid")
+    ]
+    assert len(child_nodes) == 1
+    assert child_nodes.iloc[0]["image_path_raw"] == ""
+    assert child_nodes.iloc[0]["command_line_raw"] == "cmd-without-path --arg"
+
+
+def test_process_open_does_not_contaminate_actor_uuid_with_object_image(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="OPEN",
+            image="C:\\Windows\\object-proc.exe",
+            parent="C:\\Windows\\some-parent.exe",
+            actor_uuid="actor-open-uuid",
+            object_uuid="object-open-uuid",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:02",
+            archive_date="2020-01-01",
+            image="C:\\Windows\\real-actor.exe",
+            actor_uuid="actor-open-uuid",
+            pid="1234",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    nodes = _load_nodes(pathlib.Path(args.output_dir))
+    actor_nodes = nodes.loc[
+        (nodes["node_type"] == "PROCESS")
+        & (nodes["process_instance_uuid"] == "actor-open-uuid")
+    ]
+    assert len(actor_nodes) == 1
+    assert actor_nodes.iloc[0]["image_path_raw"] == "C:\\Windows\\real-actor.exe"
+    assert actor_nodes.iloc[0]["identity_attribute_conflict"] == "no"
+
+
+def test_file_event_without_resolvable_process_emits_no_process_file_edge(tmp_path):
+    rows = [
+        _file_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            image="",
+            pid="",
+            ppid="",
+            actor_uuid="",
+            file_path="C:\\Temp\\unlinked.txt",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    assert not (edges["relation"] == "process_accessed_file").any()
+
+
+def test_flow_event_without_resolvable_process_emits_no_process_destination_edge(tmp_path):
+    rows = [
+        _flow_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            image="",
+            pid="",
+            ppid="",
+            actor_uuid="",
+            dest="203.0.113.55",
+            port="443",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    assert not (edges["relation"] == "process_connected_destination").any()
+
+
+def test_no_emitted_edge_has_blank_source_or_destination(completed_run):
+    _fixture, _args_ns, _meta, output_dir = completed_run
+    edges = _load_edges(output_dir)
+    assert (edges["source_id"].astype(str).str.strip() != "").all()
+    assert (edges["destination_id"].astype(str).str.strip() != "").all()
 
 
 def test_file_access_edge(completed_run):
@@ -378,8 +704,9 @@ def test_process_instances_remain_distinct_but_share_identity_attribute(tmp_path
     eda9.run_eda09(args)
     nodes = _load_nodes(pathlib.Path(args.output_dir))
     process_nodes = nodes.loc[nodes["node_type"] == "PROCESS"].copy()
-    assert len(process_nodes["node_id"].unique()) >= 2
-    assert len(process_nodes["process_identity_id"].unique()) == 1
+    child_nodes = process_nodes.loc[process_nodes["process_instance_uuid"].isin(["o1", "o2"])]
+    assert len(child_nodes["node_id"].unique()) == 2
+    assert len(child_nodes["process_identity_id"].unique()) == 1
 
 
 def test_pid_reuse_does_not_merge_instances(tmp_path):
@@ -460,55 +787,66 @@ def test_provisional_fallback_links_parent_reference(tmp_path):
     assert len(parent_file) == 1
 
 
-def test_process_instance_id_excludes_pid_alone():
-    a = eda9._process_instance_id(
-        mode="path_pid",
+def test_resolve_process_instance_uuid_present_resolves():
+    resolved = eda9._resolve_process_instance(
+        mode="uuid",
+        host_node_id="host-1",
+        uuid_text="actor-uuid-1",
+        comparison_form="",
+        pid_text="",
+        date_label="2020-01-01",
+    )
+    assert resolved is not None
+    assert resolved["process_instance_id_source"] == "uuid"
+
+
+def test_resolve_process_instance_path_and_pid_resolves_provisional():
+    resolved = eda9._resolve_process_instance(
+        mode="uuid",
         host_node_id="host-1",
         uuid_text="",
-        comparison_form="a",
-        pid_text="123",
+        comparison_form="c:/windows/cmd.exe",
+        pid_text="101",
         date_label="2020-01-01",
     )
-    b = eda9._process_instance_id(
-        mode="path_pid",
-        host_node_id="host-2",
+    assert resolved is not None
+    assert resolved["process_instance_id_source"] == "provisional_fallback"
+
+
+def test_resolve_process_instance_pid_only_returns_none():
+    resolved = eda9._resolve_process_instance(
+        mode="uuid",
+        host_node_id="host-1",
         uuid_text="",
-        comparison_form="a",
-        pid_text="123",
+        comparison_form="",
+        pid_text="101",
         date_label="2020-01-01",
     )
-    assert a["node_id"] != b["node_id"]
-    source = inspect.getsource(eda9._process_instance_id)
-    assert "date_label" in source
-    assert "comparison_form" in source
+    assert resolved is None
 
 
-def test_no_action_filter_on_process_edges(tmp_path):
-    rows = [
-        _process_event(
-            0,
-            timestamp="2020-01-01T00:00:01",
-            archive_date="2020-01-01",
-            action="WEIRD_ACTION",
-            actor_uuid="a1",
-            object_uuid="o1",
-        )
-    ]
-    fixture = _fixture(tmp_path, rows=rows)
-    args_default = _args(tmp_path, fixture, output_dir=str(tmp_path / "out_default"))
-    eda9.run_eda09(args_default)
-    edges_default = _load_edges(pathlib.Path(args_default.output_dir))
-    assert (edges_default["relation"] == "process_created_process").any()
-
-    args_filtered = _args(
-        tmp_path,
-        fixture,
-        output_dir=str(tmp_path / "out_filtered"),
-        process_create_actions="CREATE",
+def test_resolve_process_instance_path_only_returns_none():
+    resolved = eda9._resolve_process_instance(
+        mode="uuid",
+        host_node_id="host-1",
+        uuid_text="",
+        comparison_form="c:/windows/cmd.exe",
+        pid_text="",
+        date_label="2020-01-01",
     )
-    eda9.run_eda09(args_filtered)
-    edges_filtered = _load_edges(pathlib.Path(args_filtered.output_dir))
-    assert not (edges_filtered["relation"] == "process_created_process").any()
+    assert resolved is None
+
+
+def test_resolve_process_instance_empty_returns_none():
+    resolved = eda9._resolve_process_instance(
+        mode="uuid",
+        host_node_id="host-1",
+        uuid_text="",
+        comparison_form="",
+        pid_text="",
+        date_label="2020-01-01",
+    )
+    assert resolved is None
 
 
 def test_process_semantics_assumption_is_declared(completed_run):
@@ -911,6 +1249,34 @@ def test_summary_reconciliation(completed_run):
     assert summary["reconciliation"]["edge_rows"] == len(edges)
     assert summary["reconciliation"]["node_rows"] == len(nodes)
     assert summary["process_instance_count"] >= summary["process_identity_count"]
+    assert summary["reconciliation"]["edge_relation_sum_matches"] is True
+    assert summary["reconciliation"]["node_type_sum_matches"] is True
+    assert "graph_summary.json" not in summary["deliverable_sha256"]
+    assert len(summary["graph_summary_content_sha256"]) == 64
+
+
+def test_summary_event_uuid_counters_are_event_level(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            actor_uuid="",
+            object_uuid="obj-a",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:02",
+            archive_date="2020-01-01",
+            actor_uuid="actor-b",
+            object_uuid="",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    summary = eda9.run_eda09(args)
+    assert summary["events_missing_actor_uuid"] == 1
+    assert summary["events_missing_object_uuid"] == 1
 
 
 def test_outputs_exactly_three_files_and_refuses_existing_output_dir(tmp_path):

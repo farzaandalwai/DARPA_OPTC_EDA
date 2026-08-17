@@ -56,6 +56,18 @@ PRECHECK_WARNING = (
     "parent paths and recur across dates. actorID/objectID groups likewise lack "
     "guaranteed process-instance identity."
 )
+SYSC0201_CREATE_PROBE_EVIDENCE = {
+    "host": "SysClient0201",
+    "date": "2019-09-23",
+    "create_parent_validation": {"numerator": 8387, "denominator": 8545, "rate": 0.9815},
+    "create_child_later_file_flow_actor": {
+        "numerator": 5492,
+        "denominator": 8545,
+        "rate": 0.6427,
+    },
+    "process_uuid_missing_rate": 0.0,
+    "observed_process_actions": ["CREATE", "OPEN", "TERMINATE"],
+}
 
 NODE_TYPES = ("HOST", "USER", "PROCESS", "FILE", "DESTINATION")
 RELATIONS = (
@@ -180,12 +192,18 @@ EDGE_COLUMNS = [
 
 PROCESS_EVENT_SEMANTICS_V1: dict[str, Any] = {
     "q1_actor_id_raw_on_process_events": {
-        "status": "assumed_unverified",
-        "note": "Copied from top-level actorID; parent/actor meaning is unproven.",
+        "status": "empirically_supported_create_scope",
+        "note": (
+            "For PROCESS CREATE events, actor_id_raw is treated as the parent/existing "
+            "process instance under a SysClient0201 one-day probe."
+        ),
     },
     "q2_object_id_raw_on_process_events": {
-        "status": "assumed_unverified",
-        "note": "Copied from top-level objectID; child/object meaning is unproven.",
+        "status": "empirically_supported_create_scope",
+        "note": (
+            "For PROCESS CREATE events, object_id_raw is treated as the created child "
+            "process instance under a SysClient0201 one-day probe."
+        ),
     },
     "q3_pid_raw_owner": {
         "status": "assumed_unverified",
@@ -209,6 +227,12 @@ PROCESS_EVENT_SEMANTICS_V1: dict[str, Any] = {
     },
     "fallback_pid_semantics_assumed": True,
     "eda07_preflight_warning": PRECHECK_WARNING,
+    "sysclient0201_one_day_probe_evidence": SYSC0201_CREATE_PROBE_EVIDENCE,
+    "not_universally_validated_across_hosts": True,
+    "scope_note": (
+        "Empirically supported for SysClient0201 one-day probe only; not yet "
+        "validated across all six hosts."
+    ),
 }
 
 _DRIVE_PATH_PARTS = {"content", "drive", "mydrive"}
@@ -233,11 +257,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=PROCESS_INSTANCE_KEY_UUID,
     )
     parser.add_argument("--probe-process-semantics", action="store_true")
-    parser.add_argument(
-        "--process-create-actions",
-        default="",
-        help="Comma list of PROCESS action names to include; empty means no filter.",
-    )
     parser.add_argument("--batch-size", type=int, default=50_000)
     parser.add_argument("--duckdb-memory-limit", default="4GB")
     parser.add_argument("--duckdb-temp-dir", default=None)
@@ -356,13 +375,6 @@ def load_eda9_period_policy(path: pathlib.Path) -> eda4.PeriodPolicy:
         raise CacheAuditError(str(exc)) from exc
 
 
-def _normalize_actions_csv(text: str) -> set[str]:
-    if not text.strip():
-        return set()
-    values = {item.strip().upper() for item in text.split(",") if item.strip()}
-    return values
-
-
 def validate_run_config(args: argparse.Namespace) -> dict[str, Any]:
     cache_dir = pathlib.Path(args.normalized_cache_dir).expanduser()
     period_map = pathlib.Path(args.period_map_csv).expanduser()
@@ -413,7 +425,6 @@ def validate_run_config(args: argparse.Namespace) -> dict[str, Any]:
         if manifest_path is not None
         else {"manifest_version": None, "manifest_path": None}
     )
-    process_create_actions = _normalize_actions_csv(args.process_create_actions)
     return {
         "cache_dir": cache_dir,
         "period_map": period_map,
@@ -433,7 +444,6 @@ def validate_run_config(args: argparse.Namespace) -> dict[str, Any]:
         "period_policy": policy,
         "process_instance_key": str(args.process_instance_key),
         "probe_process_semantics": bool(args.probe_process_semantics),
-        "process_create_actions": process_create_actions,
         **manifest_meta,
     }
 
@@ -634,6 +644,55 @@ def _process_instance_id(
     }
 
 
+def _resolve_process_instance(
+    *,
+    mode: str,
+    host_node_id: str,
+    uuid_text: str,
+    comparison_form: str,
+    pid_text: str,
+    date_label: str,
+) -> Optional[dict[str, str]]:
+    uuid_clean = _safe_str(uuid_text).strip()
+    comparison_clean = _safe_str(comparison_form).strip()
+    pid_clean = _safe_str(pid_text).strip()
+    if mode == PROCESS_INSTANCE_KEY_UUID and uuid_clean:
+        return _process_instance_id(
+            mode=mode,
+            host_node_id=host_node_id,
+            uuid_text=uuid_clean,
+            comparison_form=comparison_clean,
+            pid_text=pid_clean,
+            date_label=date_label,
+        )
+    if comparison_clean and pid_clean:
+        return _process_instance_id(
+            mode=PROCESS_INSTANCE_KEY_PATH_PID,
+            host_node_id=host_node_id,
+            uuid_text="",
+            comparison_form=comparison_clean,
+            pid_text=pid_clean,
+            date_label=date_label,
+        )
+    return None
+
+
+def _blank_process_identity(source_field: str) -> dict[str, Any]:
+    return {
+        "canonical_id": "",
+        "entity_type": "process",
+        "raw_value": "",
+        "normalized_value": "",
+        "host_if_applicable": "",
+        "reliability_high_medium_low": "",
+        "normalization_rule_id": "",
+        "entity_status": "",
+        "reliability_reason": "",
+        "source_field": source_field,
+        "structural_category": "",
+    }
+
+
 def _node_template(node_id: str, node_type: str) -> dict[str, Any]:
     row = {column: "" for column in NODE_COLUMNS}
     row["node_id"] = node_id
@@ -642,8 +701,6 @@ def _node_template(node_id: str, node_type: str) -> dict[str, Any]:
     row["identity_attribute_conflict"] = "no"
     row["__pid_values"] = set()
     row["__ppid_values"] = set()
-    row["__first_image"] = None
-    row["__first_command"] = None
     return row
 
 
@@ -701,6 +758,17 @@ def _upsert_process_node(
     raw_event_id: str,
     event_locator: str,
 ) -> str:
+    def _merge_text(
+        row_obj: dict[str, Any], key: str, incoming: str, *, conflict_sensitive: bool
+    ) -> None:
+        current = _safe_str(row_obj.get(key))
+        new_value = _safe_str(incoming)
+        if not current and new_value:
+            row_obj[key] = new_value
+            return
+        if conflict_sensitive and current and new_value and current != new_value:
+            row_obj["identity_attribute_conflict"] = "yes"
+
     node_id = instance_meta["node_id"]
     row = nodes.get(node_id)
     if row is None:
@@ -747,20 +815,134 @@ def _upsert_process_node(
                 "eda07_process_identity": eda07_identity,
             }
         )
-        row["__first_image"] = image_path
-        row["__first_command"] = command_line_raw
         nodes[node_id] = row
+    else:
+        _merge_text(
+            row,
+            "raw_value",
+            _safe_str(normalized_identity.get("raw_value")),
+            conflict_sensitive=True,
+        )
+        _merge_text(
+            row,
+            "normalized_value",
+            _safe_str(normalized_identity.get("normalized_value")),
+            conflict_sensitive=True,
+        )
+        _merge_text(
+            row,
+            "host_scope",
+            _safe_str(normalized_identity.get("host_if_applicable")),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "entity_status",
+            _safe_str(normalized_identity.get("entity_status")),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "reliability_high_medium_low",
+            _safe_str(normalized_identity.get("reliability_high_medium_low")),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "normalization_rule_id",
+            _safe_str(normalized_identity.get("normalization_rule_id")),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "structural_category",
+            _safe_str(normalized_identity.get("structural_category")),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "source_field",
+            _safe_str(normalized_identity.get("source_field")),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "process_instance_uuid",
+            _safe_str(instance_meta["process_instance_uuid"]),
+            conflict_sensitive=True,
+        )
+        _merge_text(
+            row,
+            "process_instance_id_source",
+            _safe_str(instance_meta["process_instance_id_source"]),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "process_instance_reliability",
+            _safe_str(instance_meta["process_instance_reliability"]),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "instance_identity_status",
+            _safe_str(instance_meta["instance_identity_status"]),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "process_identity_id",
+            _safe_str(normalized_identity["canonical_id"]),
+            conflict_sensitive=True,
+        )
+        _merge_text(
+            row,
+            "process_comparison_form",
+            comparison_form,
+            conflict_sensitive=True,
+        )
+        _merge_text(
+            row,
+            "process_name_normalized",
+            process_name,
+            conflict_sensitive=True,
+        )
+        _merge_text(
+            row,
+            "image_path_raw",
+            image_path,
+            conflict_sensitive=True,
+        )
+        _merge_text(
+            row,
+            "command_line_raw",
+            command_line_raw,
+            conflict_sensitive=True,
+        )
+        _merge_text(
+            row,
+            "command_line_normalized",
+            _safe_str(command_norm.get("command_line_normalized")),
+            conflict_sensitive=True,
+        )
+        _merge_text(
+            row,
+            "command_line_normalization_status",
+            _safe_str(command_norm.get("normalization_status")),
+            conflict_sensitive=False,
+        )
+        _merge_text(
+            row,
+            "eda07_process_identity",
+            eda07_identity,
+            conflict_sensitive=True,
+        )
     row["event_count"] = int(row["event_count"]) + 1
     row["last_seen_time"] = timestamp
     if pid_raw:
         row["__pid_values"].add(pid_raw)
     if ppid_raw:
         row["__ppid_values"].add(ppid_raw)
-    if row["__first_image"] not in (None, image_path) or row["__first_command"] not in (
-        None,
-        command_line_raw,
-    ):
-        row["identity_attribute_conflict"] = "yes"
     return node_id
 
 
@@ -1123,6 +1305,9 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
     events_scanned = 0
     events_with_edges = 0
     observed_timestamps: list[str] = []
+    events_missing_actor_uuid = 0
+    events_missing_object_uuid = 0
+    emitted_edge_rows = 0
 
     try:
         connection, spill_path, spill_owned = _duck_conn(
@@ -1169,6 +1354,15 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                     if not host_raw:
                         skip_counts["missing_host_raw"] += 1
                         continue
+
+                    object_type = row.get("object_type", "")
+                    action_raw = row.get("action_raw", "").strip().upper()
+                    is_process_create = object_type == "PROCESS" and action_raw == "CREATE"
+                    if object_type == "PROCESS":
+                        if not row.get("actor_id_raw", "").strip():
+                            events_missing_actor_uuid += 1
+                        if not row.get("object_id_raw", "").strip():
+                            events_missing_object_uuid += 1
                     host_norm = eda5.normalize_entity(
                         entity_type="host",
                         raw_value=host_raw,
@@ -1186,58 +1380,87 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                     row["host_id"] = host_id
 
                     image_path = row.get("image_path_raw", "")
-                    comparison_form = eda7.process_comparison_form(image_path)
-                    acting_instance = _process_instance_id(
+                    if object_type == "PROCESS":
+                        if is_process_create:
+                            actor_image_path = row.get("parent_image_path_raw", "")
+                            actor_source_field = "parent_image_path_raw/parent_process_raw_alias"
+                            actor_command_line_raw = ""
+                            actor_pid_text = row.get("ppid_raw", "")
+                        else:
+                            actor_image_path = ""
+                            actor_source_field = "actor_id_raw_only_for_process_non_create"
+                            actor_command_line_raw = ""
+                            actor_pid_text = ""
+                    else:
+                        actor_image_path = image_path
+                        actor_source_field = "image_path_raw/process_raw_alias"
+                        actor_command_line_raw = row.get("command_line_raw", "")
+                        actor_pid_text = row.get("pid_raw", "")
+
+                    comparison_form_actor = eda7.process_comparison_form(actor_image_path)
+                    acting_instance = _resolve_process_instance(
                         mode=config["process_instance_key"],
                         host_node_id=host_id,
                         uuid_text=row.get("actor_id_raw", ""),
-                        comparison_form=comparison_form,
-                        pid_text=row.get("pid_raw", ""),
+                        comparison_form=comparison_form_actor,
+                        pid_text=actor_pid_text,
                         date_label=row.get("date_label", ""),
                     )
-                    process_identity = eda5.normalize_entity(
-                        entity_type="process",
-                        raw_value=image_path,
-                        host_scope=host_raw,
-                        source_field="image_path_raw/process_raw_alias",
-                    )
-                    command_norm = eda7.normalize_command_line(row.get("command_line_raw", ""))
-                    process_id = _upsert_process_node(
-                        nodes,
-                        instance_meta=acting_instance,
-                        normalized_identity=process_identity,
-                        comparison_form=comparison_form,
-                        process_name=eda8.process_display_name(image_path),
-                        image_path=image_path,
-                        command_line_raw=row.get("command_line_raw", ""),
-                        command_norm=command_norm,
-                        eda07_identity=eda7.unresolved_process_id(host_id, comparison_form),
-                        pid_raw=row.get("pid_raw", ""),
-                        ppid_raw=row.get("ppid_raw", ""),
-                        timestamp=row["event_time"],
-                        raw_event_id=row["raw_event_id"],
-                        event_locator=row["event_locator"],
-                    )
+                    process_id = ""
+                    command_norm = eda7.normalize_command_line(actor_command_line_raw)
+                    if acting_instance is not None:
+                        process_identity = (
+                            eda5.normalize_entity(
+                                entity_type="process",
+                                raw_value=actor_image_path,
+                                host_scope=host_raw,
+                                source_field=actor_source_field,
+                            )
+                            if actor_image_path
+                            else _blank_process_identity(actor_source_field)
+                        )
+                        process_id = _upsert_process_node(
+                            nodes,
+                            instance_meta=acting_instance,
+                            normalized_identity=process_identity,
+                            comparison_form=comparison_form_actor,
+                            process_name=eda8.process_display_name(actor_image_path),
+                            image_path=actor_image_path,
+                            command_line_raw=actor_command_line_raw,
+                            command_norm=command_norm,
+                            eda07_identity=(
+                                eda7.unresolved_process_id(host_id, comparison_form_actor)
+                                if comparison_form_actor
+                                else ""
+                            ),
+                            pid_raw=actor_pid_text,
+                            ppid_raw=row.get("ppid_raw", ""),
+                            timestamp=row["event_time"],
+                            raw_event_id=row["raw_event_id"],
+                            event_locator=row["event_locator"],
+                        )
 
                     has_edge = False
                     # HOST -> PROCESS
-                    edge = _build_common_edge_fields(
-                        row,
-                        relation="host_observed_process_instance",
-                        source_id=host_id,
-                        source_type="HOST",
-                        destination_id=process_id,
-                        destination_type="PROCESS",
-                        destination_instance_source=acting_instance["process_instance_id_source"],
-                        command_line_normalized=command_norm.get("command_line_normalized", ""),
-                    )
-                    writer.writerow(edge)
-                    edge_counts[edge["relation"]] += 1
-                    has_edge = True
+                    if process_id:
+                        edge = _build_common_edge_fields(
+                            row,
+                            relation="host_observed_process_instance",
+                            source_id=host_id,
+                            source_type="HOST",
+                            destination_id=process_id,
+                            destination_type="PROCESS",
+                            destination_instance_source=acting_instance["process_instance_id_source"],
+                            command_line_normalized=command_norm.get("command_line_normalized", ""),
+                        )
+                        writer.writerow(edge)
+                        emitted_edge_rows += 1
+                        edge_counts[edge["relation"]] += 1
+                        has_edge = True
 
                     # USER -> PROCESS
                     user_raw = row.get("user_raw") or row.get("principal_raw")
-                    if user_raw:
+                    if user_raw and process_id:
                         user_norm = eda5.normalize_entity(
                             entity_type="user_principal",
                             raw_value=user_raw,
@@ -1267,55 +1490,19 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                             ),
                         )
                         writer.writerow(edge)
+                        emitted_edge_rows += 1
                         edge_counts[edge["relation"]] += 1
                         has_edge = True
 
-                    object_type = row.get("object_type", "")
-                    action_raw = row.get("action_raw", "").strip().upper()
                     if object_type == "PROCESS":
                         action_distribution_process[action_raw or "<MISSING>"] += 1
                         parent_path = row.get("parent_image_path_raw", "")
                         child_path = row.get("image_path_raw", "")
-                        action_filter = config["process_create_actions"]
-                        action_ok = not action_filter or action_raw in action_filter
-                        if parent_path and child_path and action_ok:
+                        if action_raw == "CREATE":
                             parent_cmp = eda7.process_comparison_form(parent_path)
-                            parent_instance = _process_instance_id(
-                                mode=config["process_instance_key"],
-                                host_node_id=host_id,
-                                uuid_text=row.get("actor_id_raw", ""),
-                                comparison_form=parent_cmp,
-                                pid_text=row.get("ppid_raw", ""),
-                                date_label=row.get("date_label", ""),
-                            )
-                            parent_identity = eda5.normalize_entity(
-                                entity_type="process",
-                                raw_value=parent_path,
-                                host_scope=host_raw,
-                                source_field="parent_image_path_raw/parent_process_raw_alias",
-                            )
-                            parent_cmd_norm = eda7.normalize_command_line("")
-                            parent_id = _upsert_process_node(
-                                nodes,
-                                instance_meta=parent_instance,
-                                normalized_identity=parent_identity,
-                                comparison_form=parent_cmp,
-                                process_name=eda8.process_display_name(parent_path),
-                                image_path=parent_path,
-                                command_line_raw="",
-                                command_norm=parent_cmd_norm,
-                                eda07_identity=eda7.unresolved_process_id(
-                                    host_id, parent_cmp
-                                ),
-                                pid_raw=row.get("ppid_raw", ""),
-                                ppid_raw="",
-                                timestamp=row["event_time"],
-                                raw_event_id=row["raw_event_id"],
-                                event_locator=row["event_locator"],
-                            )
-
+                            parent_instance = acting_instance
                             child_cmp = eda7.process_comparison_form(child_path)
-                            child_instance = _process_instance_id(
+                            child_instance = _resolve_process_instance(
                                 mode=config["process_instance_key"],
                                 host_node_id=host_id,
                                 uuid_text=row.get("object_id_raw", ""),
@@ -1323,71 +1510,91 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                                 pid_text=row.get("pid_raw", ""),
                                 date_label=row.get("date_label", ""),
                             )
-                            child_identity = eda5.normalize_entity(
-                                entity_type="process",
-                                raw_value=child_path,
-                                host_scope=host_raw,
-                                source_field="image_path_raw/process_raw_alias",
-                            )
-                            child_id = _upsert_process_node(
-                                nodes,
-                                instance_meta=child_instance,
-                                normalized_identity=child_identity,
-                                comparison_form=child_cmp,
-                                process_name=eda8.process_display_name(child_path),
-                                image_path=child_path,
-                                command_line_raw=row.get("command_line_raw", ""),
-                                command_norm=command_norm,
-                                eda07_identity=eda7.unresolved_process_id(host_id, child_cmp),
-                                pid_raw=row.get("pid_raw", ""),
-                                ppid_raw=row.get("ppid_raw", ""),
-                                timestamp=row["event_time"],
-                                raw_event_id=row["raw_event_id"],
-                                event_locator=row["event_locator"],
-                            )
+                            if child_instance is not None:
+                                child_identity = (
+                                    eda5.normalize_entity(
+                                        entity_type="process",
+                                        raw_value=child_path,
+                                        host_scope=host_raw,
+                                        source_field="image_path_raw/process_raw_alias",
+                                    )
+                                    if child_path
+                                    else _blank_process_identity("image_path_raw/process_raw_alias")
+                                )
+                                child_command_raw = row.get("command_line_raw", "")
+                                child_command_norm = eda7.normalize_command_line(child_command_raw)
+                                child_id = _upsert_process_node(
+                                    nodes,
+                                    instance_meta=child_instance,
+                                    normalized_identity=child_identity,
+                                    comparison_form=child_cmp,
+                                    process_name=eda8.process_display_name(child_path),
+                                    image_path=child_path,
+                                    command_line_raw=child_command_raw,
+                                    command_norm=child_command_norm,
+                                    eda07_identity=(
+                                        eda7.unresolved_process_id(host_id, child_cmp)
+                                        if child_cmp
+                                        else ""
+                                    ),
+                                    pid_raw=row.get("pid_raw", ""),
+                                    ppid_raw=row.get("ppid_raw", ""),
+                                    timestamp=row["event_time"],
+                                    raw_event_id=row["raw_event_id"],
+                                    event_locator=row["event_locator"],
+                                )
 
-                            edge = _build_common_edge_fields(
-                                row,
-                                relation="process_created_process",
-                                source_id=parent_id,
-                                source_type="PROCESS",
-                                destination_id=child_id,
-                                destination_type="PROCESS",
-                                source_instance_source=parent_instance[
-                                    "process_instance_id_source"
-                                ],
-                                destination_instance_source=child_instance[
-                                    "process_instance_id_source"
-                                ],
-                                command_line_normalized=command_norm.get(
-                                    "command_line_normalized", ""
-                                ),
-                            )
-                            writer.writerow(edge)
-                            edge_counts[edge["relation"]] += 1
-                            has_edge = True
+                                edge = _build_common_edge_fields(
+                                    row,
+                                    relation="host_observed_process_instance",
+                                    source_id=host_id,
+                                    source_type="HOST",
+                                    destination_id=child_id,
+                                    destination_type="PROCESS",
+                                    destination_instance_source=child_instance[
+                                        "process_instance_id_source"
+                                    ],
+                                    command_line_normalized=child_command_norm.get(
+                                        "command_line_normalized", ""
+                                    ),
+                                )
+                                writer.writerow(edge)
+                                emitted_edge_rows += 1
+                                edge_counts[edge["relation"]] += 1
+                                has_edge = True
 
-                            edge = _build_common_edge_fields(
-                                row,
-                                relation="host_observed_process_instance",
-                                source_id=host_id,
-                                source_type="HOST",
-                                destination_id=child_id,
-                                destination_type="PROCESS",
-                                destination_instance_source=child_instance[
-                                    "process_instance_id_source"
-                                ],
-                                command_line_normalized=command_norm.get(
-                                    "command_line_normalized", ""
-                                ),
-                            )
-                            writer.writerow(edge)
-                            edge_counts[edge["relation"]] += 1
-                            has_edge = True
+                            if (
+                                parent_instance is not None
+                                and child_instance is not None
+                                and process_id
+                            ):
+                                parent_id = process_id
+
+                                edge = _build_common_edge_fields(
+                                    row,
+                                    relation="process_created_process",
+                                    source_id=parent_id,
+                                    source_type="PROCESS",
+                                    destination_id=child_id,
+                                    destination_type="PROCESS",
+                                    source_instance_source=parent_instance[
+                                        "process_instance_id_source"
+                                    ],
+                                    destination_instance_source=child_instance[
+                                        "process_instance_id_source"
+                                    ],
+                                    command_line_normalized=child_command_norm.get(
+                                        "command_line_normalized", ""
+                                    ),
+                                )
+                                writer.writerow(edge)
+                                emitted_edge_rows += 1
+                                edge_counts[edge["relation"]] += 1
+                                has_edge = True
 
                     file_path = row.get("file_path_raw") or row.get("module_path_raw")
                     if object_type in {"FILE", "MODULE"} or file_path:
-                        if file_path:
+                        if file_path and process_id and acting_instance is not None:
                             file_norm = eda5.normalize_entity(
                                 entity_type="file_path",
                                 raw_value=file_path,
@@ -1417,12 +1624,13 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                                 ),
                             )
                             writer.writerow(edge)
+                            emitted_edge_rows += 1
                             edge_counts[edge["relation"]] += 1
                             has_edge = True
 
                     if object_type == "FLOW":
                         destination = row.get("dest_ip_raw") or row.get("destination_raw")
-                        if destination:
+                        if destination and process_id and acting_instance is not None:
                             dest_norm = eda5.normalize_entity(
                                 entity_type="destination",
                                 raw_value=destination,
@@ -1452,6 +1660,7 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                                 ),
                             )
                             writer.writerow(edge)
+                            emitted_edge_rows += 1
                             edge_counts[edge["relation"]] += 1
                             has_edge = True
 
@@ -1475,6 +1684,10 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
             writer.writeheader()
             writer.writerows(finalized_nodes)
 
+        edge_rows = int(sum(edge_counts.values()))
+        node_rows = len(finalized_nodes)
+        node_type_sum_value = int(sum(node_counts.values()))
+
         summary = {
             "graph_rule_version": GRAPH_RULE_VERSION,
             "process_instance_rule_version": PROCESS_INSTANCE_RULE_VERSION,
@@ -1490,7 +1703,6 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                 "start_time": config["start_time"].isoformat(),
                 "end_time": config["end_time"].isoformat(),
                 "process_instance_key": config["process_instance_key"],
-                "process_create_actions": sorted(config["process_create_actions"]),
                 "batch_size": config["batch_size"],
                 "duckdb_memory_limit": config["memory_limit"],
                 "duckdb_threads": config["threads"],
@@ -1527,12 +1739,8 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                 if item["node_type"] == "PROCESS"
                 and item["process_instance_id_source"] == "provisional_fallback"
             ),
-            "events_missing_actor_uuid": sum(
-                1
-                for item in finalized_nodes
-                if item["node_type"] == "PROCESS" and not item["process_instance_uuid"]
-            ),
-            "events_missing_object_uuid": 0,
+            "events_missing_actor_uuid": int(events_missing_actor_uuid),
+            "events_missing_object_uuid": int(events_missing_object_uuid),
             "identity_attribute_conflict_count": sum(
                 1
                 for item in finalized_nodes
@@ -1542,10 +1750,12 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
             "process_event_semantics_v1": PROCESS_EVENT_SEMANTICS_V1,
             "fallback_pid_semantics_assumed": True,
             "reconciliation": {
-                "edge_rows": int(sum(edge_counts.values())),
-                "node_rows": len(finalized_nodes),
-                "edge_relation_sum_matches": int(sum(edge_counts.values())),
-                "node_type_sum_matches": int(sum(node_counts.values())),
+                "edge_rows": edge_rows,
+                "node_rows": node_rows,
+                "edge_relation_sum_value": edge_rows,
+                "edge_relation_sum_matches": bool(edge_rows == emitted_edge_rows),
+                "node_type_sum_value": node_type_sum_value,
+                "node_type_sum_matches": bool(node_type_sum_value == node_rows),
             },
             "git_commit": _git_commit(config["project_root"]),
             "peak_rss_bytes": _peak_rss_bytes(),
@@ -1557,12 +1767,13 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                 "Reconciliation failure: process_instance_count < process_identity_count"
             )
 
-        _atomic_write_json(summary, summary_path)
         summary["deliverable_sha256"] = {
             "nodes.csv": _sha256_file(nodes_path),
             "edges.csv": _sha256_file(edges_path),
-            "graph_summary.json": _sha256_file(summary_path),
         }
+        summary["graph_summary_content_sha256"] = hashlib.sha256(
+            _compact_json(summary).encode("utf-8")
+        ).hexdigest()
         _atomic_write_json(summary, summary_path)
 
         _assert_no_temp_files(staging)
