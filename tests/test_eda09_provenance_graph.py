@@ -758,6 +758,118 @@ def test_probe_action_specific_equal_timestamp_not_earlier(tmp_path):
     assert by_action["CREATE"]["rate"] == 0.0
 
 
+def test_probe_create_child_validation_later_file_flow_match(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            actor_uuid="actor-create",
+            object_uuid="child-create-1",
+        ),
+        _flow_event(
+            1,
+            timestamp="2020-01-01T00:00:02",
+            archive_date="2020-01-01",
+            actor_uuid="child-create-1",
+        ),
+    ]
+    summary = _run_probe(tmp_path, rows)
+    create_child = summary["create_child_validation"]
+    assert create_child["total_create_events"] == 1
+    assert create_child["unique_create_object_ids_nonempty"] == 1
+    assert create_child["unique_create_object_ids_with_later_file_flow_actor"] == 1
+    assert create_child["unique_rate"] == 1.0
+    assert create_child["create_events_with_nonempty_object_id"] == 1
+    assert create_child["create_events_with_later_file_flow_actor"] == 1
+    assert create_child["event_rate"] == 1.0
+
+
+def test_probe_create_child_validation_equal_timestamp_no_match(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            actor_uuid="actor-create",
+            object_uuid="child-create-same-ts",
+        ),
+        _file_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            actor_uuid="child-create-same-ts",
+        ),
+    ]
+    summary = _run_probe(tmp_path, rows)
+    create_child = summary["create_child_validation"]
+    assert create_child["total_create_events"] == 1
+    assert create_child["unique_create_object_ids_nonempty"] == 1
+    assert create_child["unique_create_object_ids_with_later_file_flow_actor"] == 0
+    assert create_child["unique_rate"] == 0.0
+    assert create_child["create_events_with_nonempty_object_id"] == 1
+    assert create_child["create_events_with_later_file_flow_actor"] == 0
+    assert create_child["event_rate"] == 0.0
+
+
+def test_probe_create_parent_validation_prior_process_object_match(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            actor_uuid="older-actor",
+            object_uuid="parent-seen-before",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:02",
+            archive_date="2020-01-01",
+            action="CREATE",
+            actor_uuid="parent-seen-before",
+            object_uuid="new-child",
+        ),
+    ]
+    summary = _run_probe(tmp_path, rows)
+    parent = summary["create_parent_validation"]
+    assert parent["denominator"] == 2
+    assert parent["numerator"] == 1
+    assert parent["rate"] == 0.5
+    by_action = parent["by_earlier_process_action"]
+    assert by_action["CREATE"]["numerator"] == 1
+    assert by_action["OPEN"]["numerator"] == 0
+    assert by_action["TERMINATE"]["numerator"] == 0
+
+
+def test_probe_create_parent_validation_equal_timestamp_no_prior_match(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            actor_uuid="actor-a",
+            object_uuid="same-ts-parent",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            actor_uuid="same-ts-parent",
+            object_uuid="child-b",
+        ),
+    ]
+    summary = _run_probe(tmp_path, rows)
+    parent = summary["create_parent_validation"]
+    assert parent["denominator"] == 2
+    assert parent["numerator"] == 0
+    assert parent["rate"] == 0.0
+
+
 def test_probe_source_does_not_accumulate_all_rows_list():
     source = inspect.getsource(eda9._probe_process_semantics)
     assert "rows.extend(batch.to_pylist())" not in source

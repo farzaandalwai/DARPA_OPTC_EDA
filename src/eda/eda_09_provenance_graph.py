@@ -864,6 +864,21 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
     process_object_ids_pending_same_time: set[str] = set()
     process_object_ids_seen_by_action: dict[str, set[str]] = defaultdict(set)
     process_object_ids_pending_same_time_by_action: dict[str, set[str]] = defaultdict(set)
+
+    create_object_ids_seen: set[str] = set()
+    create_object_ids_pending_same_time: set[str] = set()
+    create_total_events = 0
+    create_events_with_nonempty_object_id = 0
+    create_object_ids_nonempty: set[str] = set()
+    create_object_ids_matched_later_file_flow_actor: set[str] = set()
+    create_unmatched_event_count_by_object_id: dict[str, int] = defaultdict(int)
+    create_unmatched_event_count_pending_same_time_by_object_id: dict[str, int] = defaultdict(int)
+    create_events_with_later_file_flow_actor = 0
+
+    create_parent_denominator = 0
+    create_parent_numerator = 0
+    create_parent_numerator_by_earlier_action: Counter[str] = Counter()
+
     actor_matches_prior_object = 0
     actor_matches_prior_object_by_action: Counter[str] = Counter()
     actor_total_file_flow_nonempty = 0
@@ -881,6 +896,16 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
             for action_name, object_ids in process_object_ids_pending_same_time_by_action.items():
                 process_object_ids_seen_by_action[action_name].update(object_ids)
             process_object_ids_pending_same_time_by_action.clear()
+        if create_object_ids_pending_same_time:
+            create_object_ids_seen.update(create_object_ids_pending_same_time)
+            create_object_ids_pending_same_time.clear()
+        if create_unmatched_event_count_pending_same_time_by_object_id:
+            for (
+                object_id,
+                count,
+            ) in create_unmatched_event_count_pending_same_time_by_object_id.items():
+                create_unmatched_event_count_by_object_id[object_id] += count
+            create_unmatched_event_count_pending_same_time_by_object_id.clear()
         if actor_pid_pending_same_time:
             for actor_id, pid_values in actor_pid_pending_same_time.items():
                 actor_seen_pid[actor_id].update(pid_values)
@@ -909,6 +934,13 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
                 for action_name in process_object_ids_seen_by_action:
                     if actor in process_object_ids_seen_by_action[action_name]:
                         actor_matches_prior_object_by_action[action_name] += 1
+
+                if actor in create_object_ids_seen:
+                    create_object_ids_matched_later_file_flow_actor.add(actor)
+                unmatched_count = create_unmatched_event_count_by_object_id.get(actor, 0)
+                if unmatched_count:
+                    create_events_with_later_file_flow_actor += unmatched_count
+                    create_unmatched_event_count_by_object_id[actor] = 0
 
             # Learn actor->pid from all event types, but strictly from earlier timestamps.
             if actor and pid:
@@ -939,6 +971,25 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
                 if object_id:
                     process_object_ids_pending_same_time.add(object_id)
                     process_object_ids_pending_same_time_by_action[action_name].add(object_id)
+
+                if action_name == "CREATE":
+                    create_total_events += 1
+                    if object_id:
+                        create_events_with_nonempty_object_id += 1
+                        create_object_ids_nonempty.add(object_id)
+                        create_object_ids_pending_same_time.add(object_id)
+                        create_unmatched_event_count_pending_same_time_by_object_id[
+                            object_id
+                        ] += 1
+                    if actor:
+                        create_parent_denominator += 1
+                        if actor in process_object_ids_seen:
+                            create_parent_numerator += 1
+                        for candidate_action in target_actions:
+                            if actor in process_object_ids_seen_by_action.get(
+                                candidate_action, set()
+                            ):
+                                create_parent_numerator_by_earlier_action[candidate_action] += 1
 
     _flush_same_timestamp_state()
 
@@ -989,6 +1040,55 @@ def _probe_process_semantics(connection, config: dict[str, Any]) -> dict[str, An
                 ),
             }
             for action_name in sorted(set(action_counts) | set(target_actions))
+        },
+        "create_child_validation": {
+            "total_create_events": int(create_total_events),
+            "unique_create_object_ids_nonempty": int(len(create_object_ids_nonempty)),
+            "unique_create_object_ids_with_later_file_flow_actor": int(
+                len(create_object_ids_matched_later_file_flow_actor)
+            ),
+            "unique_rate": (
+                float(len(create_object_ids_matched_later_file_flow_actor))
+                / float(len(create_object_ids_nonempty))
+                if create_object_ids_nonempty
+                else 0.0
+            ),
+            "create_events_with_nonempty_object_id": int(
+                create_events_with_nonempty_object_id
+            ),
+            "create_events_with_later_file_flow_actor": int(
+                create_events_with_later_file_flow_actor
+            ),
+            "event_rate": (
+                float(create_events_with_later_file_flow_actor)
+                / float(create_events_with_nonempty_object_id)
+                if create_events_with_nonempty_object_id
+                else 0.0
+            ),
+        },
+        "create_parent_validation": {
+            "denominator": int(create_parent_denominator),
+            "numerator": int(create_parent_numerator),
+            "rate": (
+                float(create_parent_numerator) / float(create_parent_denominator)
+                if create_parent_denominator
+                else 0.0
+            ),
+            "by_earlier_process_action": {
+                action_name: {
+                    "denominator": int(create_parent_denominator),
+                    "numerator": int(
+                        create_parent_numerator_by_earlier_action.get(action_name, 0)
+                    ),
+                    "rate": (
+                        float(create_parent_numerator_by_earlier_action.get(action_name, 0))
+                        / float(create_parent_denominator)
+                        if create_parent_denominator
+                        else 0.0
+                    ),
+                }
+                for action_name in target_actions
+            },
         },
         "process_action_vocabulary": dict(sorted(action_counts.items())),
         "missing_uuid_rates": {
