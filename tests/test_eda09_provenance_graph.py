@@ -291,6 +291,102 @@ def test_process_creation_edge(completed_run):
     assert row["destination_instance_source"] in {"uuid", "provisional_fallback"}
 
 
+def test_create_distinct_actor_object_uuid_emits_parent_child_edge(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="C:\\Windows\\parent-distinct.exe",
+            image="C:\\Windows\\child-distinct.exe",
+            actor_uuid="parent-distinct-uuid",
+            object_uuid="child-distinct-uuid",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    creation = edges.loc[edges["relation"] == "process_created_process"]
+    assert len(creation) == 1
+    edge = creation.iloc[0]
+    assert edge["source_id"] != edge["destination_id"]
+
+
+def test_create_self_uuid_suppresses_process_created_process(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="C:\\Windows\\parent-self.exe",
+            image="C:\\Windows\\child-self.exe",
+            command="child-self --run",
+            actor_uuid="self-uuid",
+            object_uuid="self-uuid",
+        )
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    output_dir = pathlib.Path(args.output_dir)
+    edges = _load_edges(output_dir)
+    nodes = _load_nodes(output_dir)
+    summary = _load_summary(output_dir)
+
+    assert not (edges["relation"] == "process_created_process").any()
+    child_nodes = nodes.loc[
+        (nodes["node_type"] == "PROCESS") & (nodes["process_instance_uuid"] == "self-uuid")
+    ]
+    assert len(child_nodes) == 1
+    child = child_nodes.iloc[0]
+    assert child["image_path_raw"] == "C:\\Windows\\child-self.exe"
+    assert child["identity_attribute_conflict"] == "no"
+
+    host_child = edges.loc[
+        (edges["relation"] == "host_observed_process_instance")
+        & (edges["destination_id"] == child["node_id"])
+    ]
+    assert len(host_child) == 1
+    assert summary["process_create_events_total"] == 1
+    assert summary["process_create_self_uuid_events"] == 1
+    assert summary["process_create_self_uuid_edges_suppressed"] == 1
+
+
+def test_no_process_created_process_edge_has_self_loop(tmp_path):
+    rows = [
+        _process_event(
+            0,
+            timestamp="2020-01-01T00:00:01",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="C:\\Windows\\parent-a.exe",
+            image="C:\\Windows\\child-a.exe",
+            actor_uuid="parent-a-uuid",
+            object_uuid="child-a-uuid",
+        ),
+        _process_event(
+            1,
+            timestamp="2020-01-01T00:00:02",
+            archive_date="2020-01-01",
+            action="CREATE",
+            parent="C:\\Windows\\parent-self.exe",
+            image="C:\\Windows\\child-self.exe",
+            actor_uuid="same-uuid",
+            object_uuid="same-uuid",
+        ),
+    ]
+    fixture = _fixture(tmp_path, rows=rows)
+    args = _args(tmp_path, fixture)
+    eda9.run_eda09(args)
+    edges = _load_edges(pathlib.Path(args.output_dir))
+    creation = edges.loc[edges["relation"] == "process_created_process"]
+    if not creation.empty:
+        assert (creation["source_id"] != creation["destination_id"]).all()
+
+
 def test_open_and_terminate_do_not_emit_process_created_process(tmp_path):
     rows = [
         _process_event(
@@ -854,6 +950,24 @@ def test_process_semantics_assumption_is_declared(completed_run):
     summary = _load_summary(output_dir)
     block = summary["process_event_semantics_v1"]
     assert "q1_actor_id_raw_on_process_events" in block
+    assert "self-UUID CREATE" in block["q1_actor_id_raw_on_process_events"]["note"]
+    assert "no parent-child edge is emitted" in block["q1_actor_id_raw_on_process_events"]["note"]
+    assert "duplicated UUID is conservatively retained as the child" in block[
+        "q2_object_id_raw_on_process_events"
+    ]["note"]
+    assert (
+        block["scope_note"]
+        == "Empirically supported only for SysClient0201 on 2019-09-23; not yet validated across all six hosts."
+    )
+    evidence = block["sysclient0201_one_day_probe_evidence"]
+    assert evidence["create_events_total"] == 8545
+    assert evidence["create_self_uuid_events"] == 124
+    assert evidence["create_self_uuid_rate"] == pytest.approx(0.01451)
+    assert evidence["self_uuid_prior_process_event_ppid_pid_match_within_60s"]["numerator"] == 124
+    assert evidence["self_uuid_prior_uuid_candidate_available"]["numerator"] == 124
+    assert evidence["self_uuid_nearest_prior_timing_ms"]["average_ms"] == pytest.approx(9.854839)
+    assert evidence["self_uuid_nearest_prior_timing_ms"]["maximum_ms"] == pytest.approx(400.0)
+    assert evidence["parent_uuid_recovery_adopted"] is False
     assert block["fallback_pid_semantics_assumed"] is True
     assert "eda07_preflight_warning" in block
 

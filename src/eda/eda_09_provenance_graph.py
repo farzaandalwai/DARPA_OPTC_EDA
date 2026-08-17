@@ -59,6 +59,28 @@ PRECHECK_WARNING = (
 SYSC0201_CREATE_PROBE_EVIDENCE = {
     "host": "SysClient0201",
     "date": "2019-09-23",
+    "create_events_total": 8545,
+    "create_self_uuid_events": 124,
+    "create_self_uuid_rate": 0.01451,
+    "self_uuid_prior_process_event_ppid_pid_match_within_60s": {
+        "numerator": 124,
+        "denominator": 124,
+        "rate": 1.0,
+    },
+    "self_uuid_prior_uuid_candidate_available": {
+        "numerator": 124,
+        "denominator": 124,
+        "rate": 1.0,
+    },
+    "self_uuid_nearest_prior_timing_ms": {
+        "average_ms": 9.854839,
+        "maximum_ms": 400.0,
+    },
+    "parent_uuid_recovery_adopted": False,
+    "parent_uuid_recovery_note": (
+        "Intentionally not adopted: prior PROCESS OPEN actor/object UUID semantics "
+        "were ambiguous in observed candidates."
+    ),
     "create_parent_validation": {"numerator": 8387, "denominator": 8545, "rate": 0.9815},
     "create_child_later_file_flow_actor": {
         "numerator": 5492,
@@ -194,15 +216,19 @@ PROCESS_EVENT_SEMANTICS_V1: dict[str, Any] = {
     "q1_actor_id_raw_on_process_events": {
         "status": "empirically_supported_create_scope",
         "note": (
-            "For PROCESS CREATE events, actor_id_raw is treated as the parent/existing "
-            "process instance under a SysClient0201 one-day probe."
+            "For ordinary PROCESS CREATE events with distinct nonempty actor/object UUIDs, "
+            "actor_id_raw is treated as the parent/existing process instance. For "
+            "self-UUID CREATE events where actor_id_raw == object_id_raw, parent identity "
+            "is treated as unresolved and no parent-child edge is emitted."
         ),
     },
     "q2_object_id_raw_on_process_events": {
         "status": "empirically_supported_create_scope",
         "note": (
-            "For PROCESS CREATE events, object_id_raw is treated as the created child "
-            "process instance under a SysClient0201 one-day probe."
+            "For normal PROCESS CREATE events, object_id_raw is treated as the child "
+            "process UUID. In the observed self-UUID exceptional pattern, the duplicated "
+            "UUID is conservatively retained as the child while parent identity remains "
+            "unresolved."
         ),
     },
     "q3_pid_raw_owner": {
@@ -230,7 +256,7 @@ PROCESS_EVENT_SEMANTICS_V1: dict[str, Any] = {
     "sysclient0201_one_day_probe_evidence": SYSC0201_CREATE_PROBE_EVIDENCE,
     "not_universally_validated_across_hosts": True,
     "scope_note": (
-        "Empirically supported for SysClient0201 one-day probe only; not yet "
+        "Empirically supported only for SysClient0201 on 2019-09-23; not yet "
         "validated across all six hosts."
     ),
 }
@@ -1308,6 +1334,9 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
     events_missing_actor_uuid = 0
     events_missing_object_uuid = 0
     emitted_edge_rows = 0
+    process_create_events_total = 0
+    process_create_self_uuid_events = 0
+    process_create_self_uuid_edges_suppressed = 0
 
     try:
         connection, spill_path, spill_owned = _duck_conn(
@@ -1358,10 +1387,20 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                     object_type = row.get("object_type", "")
                     action_raw = row.get("action_raw", "").strip().upper()
                     is_process_create = object_type == "PROCESS" and action_raw == "CREATE"
+                    actor_uuid_raw = row.get("actor_id_raw", "").strip()
+                    object_uuid_raw = row.get("object_id_raw", "").strip()
+                    is_process_create_self_uuid = bool(
+                        is_process_create and actor_uuid_raw and actor_uuid_raw == object_uuid_raw
+                    )
+                    if is_process_create:
+                        process_create_events_total += 1
+                        if is_process_create_self_uuid:
+                            process_create_self_uuid_events += 1
+                            process_create_self_uuid_edges_suppressed += 1
                     if object_type == "PROCESS":
-                        if not row.get("actor_id_raw", "").strip():
+                        if not actor_uuid_raw:
                             events_missing_actor_uuid += 1
-                        if not row.get("object_id_raw", "").strip():
+                        if not object_uuid_raw:
                             events_missing_object_uuid += 1
                     host_norm = eda5.normalize_entity(
                         entity_type="host",
@@ -1381,11 +1420,16 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
 
                     image_path = row.get("image_path_raw", "")
                     if object_type == "PROCESS":
-                        if is_process_create:
+                        if is_process_create and not is_process_create_self_uuid:
                             actor_image_path = row.get("parent_image_path_raw", "")
                             actor_source_field = "parent_image_path_raw/parent_process_raw_alias"
                             actor_command_line_raw = ""
                             actor_pid_text = row.get("ppid_raw", "")
+                        elif is_process_create and is_process_create_self_uuid:
+                            actor_image_path = ""
+                            actor_source_field = "actor_id_raw_suppressed_for_create_self_uuid"
+                            actor_command_line_raw = ""
+                            actor_pid_text = ""
                         else:
                             actor_image_path = ""
                             actor_source_field = "actor_id_raw_only_for_process_non_create"
@@ -1401,7 +1445,7 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                     acting_instance = _resolve_process_instance(
                         mode=config["process_instance_key"],
                         host_node_id=host_id,
-                        uuid_text=row.get("actor_id_raw", ""),
+                        uuid_text="" if is_process_create_self_uuid else row.get("actor_id_raw", ""),
                         comparison_form=comparison_form_actor,
                         pid_text=actor_pid_text,
                         date_label=row.get("date_label", ""),
@@ -1564,7 +1608,8 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
                                 has_edge = True
 
                             if (
-                                parent_instance is not None
+                                not is_process_create_self_uuid
+                                and parent_instance is not None
                                 and child_instance is not None
                                 and process_id
                             ):
@@ -1717,6 +1762,11 @@ def run_eda09(args: argparse.Namespace) -> dict[str, Any]:
             "edge_counts_by_relation": dict(sorted(edge_counts.items())),
             "period_role_counts": dict(sorted(period_role_counts.items())),
             "process_action_distribution": dict(sorted(action_distribution_process.items())),
+            "process_create_events_total": int(process_create_events_total),
+            "process_create_self_uuid_events": int(process_create_self_uuid_events),
+            "process_create_self_uuid_edges_suppressed": int(
+                process_create_self_uuid_edges_suppressed
+            ),
             "observed_time_min": min(observed_timestamps) if observed_timestamps else None,
             "observed_time_max": max(observed_timestamps) if observed_timestamps else None,
             "process_instance_count": node_counts.get("PROCESS", 0),
