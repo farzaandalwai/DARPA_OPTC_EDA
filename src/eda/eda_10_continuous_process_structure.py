@@ -357,27 +357,46 @@ def validate_run_config(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _progress(message: str) -> None:
+    print(f"[EDA10] {message}", flush=True)
+
+
+def _prepare_duckdb_temp_dirs(temp_root: Optional[str]) -> dict[str, Any]:
+    run_id = uuid.uuid4().hex[:12]
+    root_owned = False
+    if temp_root is None:
+        root_path = pathlib.Path(tempfile.mkdtemp(prefix="eda10_duckdb_root_"))
+        root_owned = True
+    else:
+        root_path = eda5._validate_duckdb_temp_dir(temp_root)
+        if _looks_like_drive(root_path):
+            raise CacheAuditError("Google Drive spill paths are refused")
+        root_path.mkdir(parents=True, exist_ok=True)
+    stream_dir = root_path / f"stream_{run_id}"
+    aggregation_dir = root_path / f"aggregation_{run_id}"
+    stream_dir.mkdir(parents=True, exist_ok=False)
+    aggregation_dir.mkdir(parents=True, exist_ok=False)
+    return {
+        "root_path": root_path,
+        "root_owned": bool(root_owned),
+        "stream_dir": stream_dir,
+        "aggregation_dir": aggregation_dir,
+    }
+
+
 def _duck_conn(
     cache_dir: pathlib.Path,
     *,
     memory_limit: str,
-    temp_dir: Optional[str],
+    temp_dir: str,
     threads: int,
 ):
     import duckdb
 
     connection = None
-    spill_path: Optional[pathlib.Path] = None
-    spill_owned = False
     try:
-        if temp_dir is None:
-            spill_path = pathlib.Path(tempfile.mkdtemp(prefix="eda10_duckdb_tmp_"))
-            spill_owned = True
-        else:
-            spill_path = eda5._validate_duckdb_temp_dir(temp_dir)
-            if _looks_like_drive(spill_path):
-                raise CacheAuditError("Google Drive spill paths are refused")
-            spill_path.mkdir(parents=True, exist_ok=True)
+        spill_path = pathlib.Path(temp_dir).expanduser()
+        spill_path.mkdir(parents=True, exist_ok=True)
         connection = duckdb.connect()
         eda5._configure_duckdb(
             connection,
@@ -391,15 +410,13 @@ def _duck_conn(
             "CREATE VIEW events AS SELECT * FROM read_parquet("
             f"{eda5._sql_string_literal(cache_glob)})"
         )
-        return connection, str(spill_path), spill_owned
+        return connection
     except Exception:
         if connection is not None:
             try:
                 connection.close()
             except Exception:
                 pass
-        if spill_owned and spill_path is not None:
-            shutil.rmtree(spill_path, ignore_errors=True)
         raise
 
 
@@ -940,11 +957,8 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
     started = time.perf_counter()
     config = validate_run_config(args)
     stream_connection = None
-    stream_spill_path = None
-    stream_spill_owned = False
     agg_connection = None
-    agg_spill_path = None
-    agg_spill_owned = False
+    spill_dirs: Optional[dict[str, Any]] = None
     staging: Optional[pathlib.Path] = None
 
     process_nodes: dict[str, ProcessMeta] = {}
@@ -961,18 +975,22 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
     chain_supported_from_behavior: set[str] = set()
     process_seen_in_open_terminate_process_events: set[str] = set()
     create_anchor_times_by_process: dict[str, list[str]] = defaultdict(list)
+    latest_event_time = ""
 
     try:
-        stream_connection, stream_spill_path, stream_spill_owned = _duck_conn(
+        spill_dirs = _prepare_duckdb_temp_dirs(config["duckdb_temp_dir"])
+        stream_spill_path = spill_dirs["stream_dir"]
+        agg_spill_path = spill_dirs["aggregation_dir"]
+        stream_connection = _duck_conn(
             config["cache_dir"],
             memory_limit=config["memory_limit"],
-            temp_dir=config["duckdb_temp_dir"],
+            temp_dir=str(stream_spill_path),
             threads=config["threads"],
         )
-        agg_connection, agg_spill_path, agg_spill_owned = _duck_conn(
+        agg_connection = _duck_conn(
             config["cache_dir"],
             memory_limit=config["memory_limit"],
-            temp_dir=config["duckdb_temp_dir"],
+            temp_dir=str(agg_spill_path),
             threads=config["threads"],
         )
         _validate_required_columns(stream_connection)
@@ -1002,10 +1020,18 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
                 events_scanned += 1
                 event_time = row.get("event_time", "")
                 if event_time:
+                    latest_event_time = event_time
+                if event_time:
                     if observed_time_min is None or event_time < observed_time_min:
                         observed_time_min = event_time
                     if observed_time_max is None or event_time > observed_time_max:
                         observed_time_max = event_time
+                if events_scanned % 1_000_000 == 0:
+                    _progress(
+                        "events_processed="
+                        f"{events_scanned} latest_event_time={latest_event_time or '<none>'} "
+                        f"elapsed_seconds={time.perf_counter() - started:.2f}"
+                    )
 
                 object_type = row.get("object_type", "")
                 action_raw = row.get("action_raw", "").strip().upper()
@@ -1136,6 +1162,7 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
                         }
                     )
             _stage_behavior_observations(agg_connection, behavior_batch_rows)
+        _progress("finished ordered event stream")
 
         if not process_nodes:
             raise CacheAuditError("No process instances resolved for selected host/range")
@@ -1145,7 +1172,9 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
                 f"expected={expected_events_in_analysis_range} scanned={events_scanned}"
             )
 
+        _progress("starting behavior compaction")
         _build_behavior_compact_table(agg_connection)
+        _progress("finished behavior compaction")
         process_instances_rows = [vars(v) for v in process_nodes.values()]
         process_instances_df = pd.DataFrame(process_instances_rows).sort_values(
             ["process_id"], kind="stable"
@@ -1171,6 +1200,7 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
 
         chain_universe_nodes = set(chain_supported_from_create) | set(chain_supported_from_behavior)
 
+        _progress("starting topology/chain metrics")
         nodes_set = set(chain_universe_nodes)
         adjacency: dict[str, set[str]] = {node: set() for node in nodes_set}
         parents: dict[str, set[str]] = {node: set() for node in nodes_set}
@@ -1585,6 +1615,7 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
                 "Longest observed acyclic process-creation chain in the analyzed host range."
             ),
         }
+        _progress("finished topology/chain metrics")
 
         summary = {
             "analysis_rule_version": ANALYSIS_RULE_VERSION,
@@ -1611,6 +1642,11 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
                 "duckdb_memory_limit": config["memory_limit"],
                 "duckdb_threads": config["threads"],
             },
+            "stream_duckdb_temp_dir": str(stream_spill_path),
+            "aggregation_duckdb_temp_dir": str(agg_spill_path),
+            "duckdb_temp_dirs_are_distinct": bool(
+                str(stream_spill_path) != str(agg_spill_path)
+            ),
             "manifest_version": config["manifest_version"],
             "cache_events_total": int(config["cache_metadata"]["total_events_written"]),
             "events_scanned": int(events_scanned),
@@ -1705,6 +1741,7 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
         structure_path = staging / "structure_summary.parquet"
         chain_metrics_path = staging / "chain_metrics.json"
         summary_path = staging / "graph_summary.json"
+        _progress("publishing outputs")
 
         structure_columns = [
             "structure_id",
@@ -1815,10 +1852,20 @@ def run_eda10(args: argparse.Namespace) -> dict[str, Any]:
                 agg_connection.close()
             except Exception:
                 pass
-        if stream_spill_owned and stream_spill_path is not None:
-            shutil.rmtree(stream_spill_path, ignore_errors=True)
-        if agg_spill_owned and agg_spill_path is not None:
-            shutil.rmtree(agg_spill_path, ignore_errors=True)
+        if spill_dirs is not None:
+            stream_dir = spill_dirs.get("stream_dir")
+            aggregation_dir = spill_dirs.get("aggregation_dir")
+            root_path = spill_dirs.get("root_path")
+            root_owned = bool(spill_dirs.get("root_owned"))
+            if isinstance(stream_dir, pathlib.Path) and stream_dir.exists():
+                shutil.rmtree(stream_dir, ignore_errors=True)
+            if isinstance(aggregation_dir, pathlib.Path) and aggregation_dir.exists():
+                shutil.rmtree(aggregation_dir, ignore_errors=True)
+            if root_owned and isinstance(root_path, pathlib.Path):
+                try:
+                    root_path.rmdir()
+                except OSError:
+                    pass
 
 
 def main(argv: Optional[list[str]] = None) -> int:

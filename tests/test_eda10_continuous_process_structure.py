@@ -492,6 +492,55 @@ def test_outputs_and_summary_files_exist(tmp_path):
     assert "analysis_rule_version" in chain_metrics
 
 
+def test_duckdb_temp_dir_isolation_and_cleanup(tmp_path):
+    rows = [
+        _process_event(0, timestamp="2020-01-01T00:00:01", archive_date="2020-01-01", actor_uuid="A", object_uuid="B"),
+        _file_event(1, timestamp="2020-01-01T00:00:02", archive_date="2020-01-01", actor_uuid="B"),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    spill_root = tmp_path / "spill_root"
+    spill_root.mkdir(parents=True, exist_ok=True)
+    sentinel = spill_root / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    args = _args(tmp_path, fixture, duckdb_temp_dir=str(spill_root))
+    summary = eda10.run_eda10(args)
+    stream_dir = pathlib.Path(summary["stream_duckdb_temp_dir"])
+    agg_dir = pathlib.Path(summary["aggregation_duckdb_temp_dir"])
+    assert summary["duckdb_temp_dirs_are_distinct"] is True
+    assert stream_dir != agg_dir
+    assert stream_dir.parent == spill_root
+    assert agg_dir.parent == spill_root
+    assert not stream_dir.exists()
+    assert not agg_dir.exists()
+    assert spill_root.exists()
+    assert sentinel.exists()
+
+
+def test_duckdb_temp_root_does_not_change_chain_results(tmp_path):
+    rows = [
+        _process_event(0, timestamp="2020-01-01T00:00:01", archive_date="2020-01-01", actor_uuid="A", object_uuid="B"),
+        _process_event(1, timestamp="2020-01-01T00:00:02", archive_date="2020-01-01", actor_uuid="B", object_uuid="C"),
+        _file_event(2, timestamp="2020-01-01T00:00:03", archive_date="2020-01-01", actor_uuid="C"),
+    ]
+    fixture = _fixture(tmp_path, rows)
+    root = tmp_path / "local_spill"
+    args_default = _args(tmp_path, fixture, output_dir=str(tmp_path / "out_default"))
+    args_root = _args(
+        tmp_path,
+        fixture,
+        output_dir=str(tmp_path / "out_root"),
+        duckdb_temp_dir=str(root),
+    )
+    summary_default = eda10.run_eda10(args_default)
+    summary_root = eda10.run_eda10(args_root)
+    assert summary_default["process_instance_count"] == summary_root["process_instance_count"]
+    assert summary_default["process_create_edge_count"] == summary_root["process_create_edge_count"]
+    assert (
+        summary_default["chain_metrics"]["root_to_leaf_distribution_including_singletons"]
+        == summary_root["chain_metrics"]["root_to_leaf_distribution_including_singletons"]
+    )
+
+
 def test_unequal_length_path_merge_exact_histogram(tmp_path):
     # A->B->D is 2 hops; A->C->E->D is 3 hops.
     rows = [
