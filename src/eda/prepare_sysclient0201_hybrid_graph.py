@@ -8,6 +8,13 @@ In particular, period_process_activity_raw_v1 is NOT assumed to contain
 behavior keys. The actual 2026-10-01 file is a process aggregate without them.
 Use --behavior-table and column options only for an inspected, explicitly
 period-assigned behavior artifact. Never substitute full-timeline compaction.
+
+The Colab controlled experiment instead uses legacy-audit, legacy-adapt,
+audit, prepare, build, compare. --legacy-inputs validates source evidence,
+features and CREATE equivalence; --behavior-links-dir feeds explicit adapter
+outputs directly. --context-key-policy exact_behavior_key_v1 preserves literal
+legacy keys. Use --structure-id-column split_structure_id for period-rebuilt
+CREATE-family metrics; reference_full_structure_id remains intact metadata.
 """
 
 from __future__ import annotations
@@ -23,8 +30,10 @@ import pyarrow.parquet as pq
 
 try:
     from . import build_period_heterogeneous_graph as graph
+    from . import adapt_structure_scoped_behavior_links as adapter
 except ImportError:
     import build_period_heterogeneous_graph as graph
+    import adapt_structure_scoped_behavior_links as adapter
 
 
 FEATURE_GROUP = "eda_10_sysclient0201_period_features_v1"
@@ -43,6 +52,9 @@ class Inputs:
     data_root: Path
     work_dir: Path
     behavior_table: Path | None = None
+    behavior_links_dir: Path | None = None
+    legacy_inputs: bool = False
+    context_key_policy: str = "canonical_v1"
     process_id_column: str = "process_id"
     structure_id_column: str = "reference_full_structure_id"
     behavior_process_column: str = "process_id"
@@ -56,7 +68,7 @@ class Inputs:
 def paths_for(cfg: Inputs) -> dict[str, Path]:
     features = cfg.data_root / FEATURE_GROUP
     split = cfg.data_root / SPLIT_GROUP
-    return {
+    paths = {
         "train_features": features / "train_process_features_raw_v1.parquet",
         "evaluation_features": features / "evaluation_process_features_raw_v1.parquet",
         "train_create": features / "train_process_create_edges_v1.parquet",
@@ -70,6 +82,29 @@ def paths_for(cfg: Inputs) -> dict[str, Path]:
         "feature_policy": cfg.data_root / OLD_GRAPH_GROUP / "rgcn_model_feature_policy_v1.json",
         "previous_graph_summary": cfg.data_root / OLD_GRAPH_GROUP / "rgcn_graph_summary_v1.csv",
     }
+    if cfg.behavior_links_dir is not None:
+        if cfg.behavior_table is not None:
+            raise graph.GraphInputError("Choose behavior_links_dir OR behavior_table, not both")
+        del paths["behavior"]
+        paths.update({role + "_behavior": cfg.behavior_links_dir / f"{role}_behavior_links_v1.parquet" for role in graph.PERIOD_ROLES})
+    if cfg.legacy_inputs:
+        paths.update(_legacy_paths(cfg))
+        paths["legacy_compatibility_audit"] = cfg.work_dir / "legacy_compatibility_audit.json"
+        if cfg.behavior_links_dir is None:
+            raise graph.GraphInputError("Legacy input mode requires explicit behavior_links_dir")
+        paths["adapter_audit"] = cfg.behavior_links_dir / adapter.AUDIT_NAME
+    return paths
+
+
+def _legacy_paths(cfg: Inputs) -> dict[str, Path]:
+    root = cfg.data_root / OLD_GRAPH_GROUP
+    return {"legacy_process_nodes": root / "hetero_process_nodes_v1.parquet",
+            "legacy_behavior_edges": root / "hetero_behavior_edges_forward_v1.parquet",
+            "legacy_create_edges": root / "process_create_edges_forward_v1.parquet"}
+
+
+def _behavior_path(paths: dict[str, Path], role: str) -> Path:
+    return paths["behavior"] if "behavior" in paths else paths[role + "_behavior"]
 
 
 def _safe_work_dir(cfg: Inputs) -> None:
@@ -117,8 +152,92 @@ def _builder_config(cfg: Inputs, role: str, process_path: Path,
         behavior_process_column=cfg.behavior_process_column,
         behavior_type_column=cfg.behavior_type_column, behavior_action_column=cfg.behavior_action_column,
         behavior_key_column=cfg.behavior_key_column, behavior_count_column=cfg.behavior_count_column,
-        period_column=cfg.period_column, host_scope="sysclient0201", top_k=10,
+        period_column=cfg.period_column,
+        host_scope="" if cfg.context_key_policy == "exact_behavior_key_v1" else "sysclient0201",
+        context_key_policy=cfg.context_key_policy, top_k=10,
     )
+
+
+def audit_legacy_inputs(cfg: Inputs) -> dict:
+    """Audit raw historical files and prove PROCESS/features/CREATE equivalence."""
+    _safe_work_dir(cfg)
+    legacy = _legacy_paths(cfg)
+    root = cfg.data_root / FEATURE_GROUP
+    paths = {**legacy, "feature_policy": cfg.data_root / OLD_GRAPH_GROUP / "rgcn_model_feature_policy_v1.json",
+             **{prefix + "_" + kind: root / f"{prefix}_process_{filename}_v1.parquet"
+                for prefix in ("train", "evaluation")
+                for kind, filename in (("features", "features_raw"), ("create", "create_edges"))}}
+    report = {"passed": False, "files": {}, "errors": [], "controlled_experiment": {},
+              "family_metrics_column": cfg.structure_id_column,
+              "context_key_policy": cfg.context_key_policy}
+    try:
+        for name, path in paths.items():
+            report["files"][name] = inspect_file(path)
+            if not path.is_file():
+                raise graph.GraphInputError(f"Missing historical/control input: {path}")
+        _, report["adapter_preflight"] = adapter.read_and_convert(adapter.Config(
+            legacy["legacy_process_nodes"], legacy["legacy_behavior_edges"], cfg.work_dir / "unused_audit_only"))
+        old_nodes = pd.read_parquet(legacy["legacy_process_nodes"])
+        old_creates = pd.read_parquet(legacy["legacy_create_edges"])
+        graph._require(old_creates, ["period_role", "source_node_id", "target_node_id", "source_node_type", "target_node_type", "relation_type"], "Historical CREATE")
+        if (not old_creates.period_role.isin(graph.PERIOD_ROLES).all()
+                or not old_creates.source_node_type.eq("PROCESS").all()
+                or not old_creates.target_node_type.eq("PROCESS").all()
+                or not old_creates.relation_type.eq("PROCESS_CREATE_PROCESS").all()):
+            raise graph.GraphInputError("Historical CREATE role/type/relation is invalid")
+        if "event_count" not in old_creates:
+            raise graph.GraphInputError("Historical CREATE lacks explicit event_count")
+        graph._counts(old_creates, "event_count", "Historical CREATE")
+        features = json.loads(paths["feature_policy"].read_text())["process_features"]
+        if len(features) != 70 or len(set(features)) != 70:
+            raise graph.GraphInputError("Historical control policy must explicitly select 70 features")
+        for role, prefix in (("verified_benign", "train"), ("evaluation", "evaluation")):
+            current = pd.read_parquet(paths[prefix + "_features"]).set_index("process_id").sort_index()
+            old = old_nodes.loc[old_nodes.period_role == role].set_index("process_id").sort_index()
+            columns = ["period_role", "split_structure_id", "reference_full_structure_id", *features]
+            pd.testing.assert_frame_equal(old[columns], current[columns], check_dtype=False, check_exact=True)
+            lookup = old_nodes.loc[old_nodes.period_role == role].set_index("node_id")
+            create = old_creates.loc[old_creates.period_role == role].copy()
+            for endpoint in ("source_node_id", "target_node_id"):
+                if not create[endpoint].isin(lookup.index).all():
+                    raise graph.GraphInputError(f"{role}: historical CREATE references missing PROCESS")
+                if "split_structure_id" in create and not create.split_structure_id.equals(create[endpoint].map(lookup.split_structure_id)):
+                    raise graph.GraphInputError(f"{role}: historical CREATE family mismatch")
+            mapped = pd.DataFrame({"parent_process_id": create.source_node_id.map(lookup.process_id),
+                                   "child_process_id": create.target_node_id.map(lookup.process_id),
+                                   "create_event_count": create.event_count})
+            expected = pd.read_parquet(paths[prefix + "_create"])
+            cols = list(mapped.columns)
+            pd.testing.assert_frame_equal(mapped.sort_values(cols).reset_index(drop=True),
+                                          expected[cols].sort_values(cols).reset_index(drop=True),
+                                          check_dtype=False, check_exact=True)
+            report["controlled_experiment"][role] = {
+                "passed": True, "process_rows": len(old), "feature_count": 70,
+                "features_and_family_metadata_identical": True, "create_rows": len(mapped),
+                "create_topology_and_counts_identical": True,
+                "split_family_count": int(old.split_structure_id.nunique()),
+                "full_reference_family_count": int(old.reference_full_structure_id.nunique()),
+            }
+        for name, path in paths.items():
+            if graph._file_hash(path) != report["files"][name]["sha256"]:
+                raise graph.GraphInputError(f"Historical/control input changed during audit: {name}")
+        report["passed"] = True
+    except (OSError, ValueError, KeyError, AssertionError) as exc:
+        report["errors"].append(str(exc))
+        if isinstance(exc, adapter.AdapterInputError):
+            report["adapter_preflight"] = exc.audit
+    _write_json(cfg.work_dir / "legacy_compatibility_audit.json", report)
+    return report
+
+
+def adapt_legacy_inputs(cfg: Inputs) -> dict:
+    if cfg.context_key_policy != "exact_behavior_key_v1" or cfg.behavior_links_dir is None:
+        raise graph.GraphInputError("Legacy adapter requires exact_behavior_key_v1 and behavior_links_dir")
+    report = audit_legacy_inputs(cfg)
+    if not report["passed"]:
+        raise graph.GraphInputError("Historical/control audit failed: " + "; ".join(report["errors"]))
+    legacy = _legacy_paths(cfg)
+    return adapter.adapt(adapter.Config(legacy["legacy_process_nodes"], legacy["legacy_behavior_edges"], cfg.behavior_links_dir))
 
 
 def audit_inputs(cfg: Inputs) -> dict:
@@ -130,7 +249,7 @@ def audit_inputs(cfg: Inputs) -> dict:
               "behavior_is_explicitly_period_assigned": False,
               "behavior_has_context_columns": False,
               "column_mapping": {key: value for key, value in asdict(cfg).items() if key.endswith("column")},
-              "family_metadata_policy": "structure_id comes from reference_full_structure_id by default; split_structure_id is preserved as metadata",
+              "family_metadata_policy": f"structure_id comes from {cfg.structure_id_column}; both original family columns are retained",
               "temporary_inputs_location": str(cfg.work_dir),
               "output_paths": {role: str(cfg.data_root / name) for role, name in OUTPUT_NAMES.items()}}
     for name, path in paths.items():
@@ -175,7 +294,7 @@ def audit_inputs(cfg: Inputs) -> dict:
                 raise graph.GraphInputError(f"{role}: reserved builder output columns in PROCESS input")
             if "structure_id" in frame and not frame["structure_id"].equals(frame[cfg.structure_id_column]):
                 raise graph.GraphInputError(f"{role}: canonical structure_id conflicts with configured family column")
-            builder = _builder_config(cfg, role, paths[prefix + "_features"], paths[prefix + "_create"], paths["behavior"], paths["feature_policy"])
+            builder = _builder_config(cfg, role, paths[prefix + "_features"], paths[prefix + "_create"], _behavior_path(paths, role), paths["feature_policy"])
             graph._features(paths["feature_policy"], "process_features", frame, builder)
             process_frames[role] = frame
             report["feature_policy_checks"][role] = {"passed": True, "process_rows": len(frame), "feature_count": 70}
@@ -197,7 +316,16 @@ def audit_inputs(cfg: Inputs) -> dict:
     try:
         # The role column alone establishes safe partitioning, not behavioral
         # sufficiency. Process aggregates without entity keys are a hard stop.
-        activity = pd.read_parquet(paths["behavior"])
+        if "behavior" in paths:
+            activity = pd.read_parquet(paths["behavior"])
+        else:
+            partitions = []
+            for role in graph.PERIOD_ROLES:
+                frame = pd.read_parquet(_behavior_path(paths, role))
+                if cfg.period_column not in frame or not frame[cfg.period_column].eq(role).all():
+                    raise graph.GraphInputError(f"{role}: period behavior-link file contains another/unassigned period")
+                partitions.append(frame)
+            activity = pd.concat(partitions, ignore_index=True)
         if cfg.period_column not in activity:
             raise graph.GraphInputError("Behavior input has no explicit period column; timestamp partitioning is forbidden")
         roles = activity[cfg.period_column]
@@ -268,13 +396,36 @@ def audit_inputs(cfg: Inputs) -> dict:
                 partition = activity.loc[activity[cfg.period_column] == role]
                 if not set(partition[cfg.behavior_process_column]) <= ids:
                     raise graph.GraphInputError(f"{role}: behavior references a missing PROCESS ID")
-                graph._check_period(partition, _builder_config(cfg, role, paths[prefix + "_features"], paths[prefix + "_create"], paths["behavior"], paths["feature_policy"]), "Behavior")
-                for column in {cfg.structure_id_column, "structure_id"} & set(partition.columns):
+                graph._check_period(partition, _builder_config(cfg, role, paths[prefix + "_features"], paths[prefix + "_create"], _behavior_path(paths, role), paths["feature_policy"]), "Behavior")
+                for column in {cfg.structure_id_column, "structure_id", "reference_full_structure_id", "split_structure_id"} & set(partition.columns):
+                    families = processes.set_index(cfg.process_id_column)[column if column in processes else cfg.structure_id_column]
                     if not partition[column].equals(partition[cfg.behavior_process_column].map(families)):
                         raise graph.GraphInputError(f"{role}: behavior {column} conflicts with PROCESS family metadata")
             report["period_checks"][role] = {"passed": True, "process_rows": len(processes), "create_rows": len(creates)}
     except Exception as exc:
         report["errors"].append(f"Split/topology compatibility: {exc}")
+    if cfg.legacy_inputs:
+        try:
+            control = json.loads(paths["legacy_compatibility_audit"].read_text())
+            proof = json.loads(paths["adapter_audit"].read_text())
+            if not control["passed"] or not proof["passed"] or cfg.context_key_policy != "exact_behavior_key_v1":
+                raise graph.GraphInputError("Historical control/adapter audit failed or exact key mode is disabled")
+            if control["family_metrics_column"] != cfg.structure_id_column or control["context_key_policy"] != cfg.context_key_policy:
+                raise graph.GraphInputError("Family/key policy changed since historical control audit")
+            for name, info in control["files"].items():
+                if name in paths and graph._file_hash(paths[name]) != info["sha256"]:
+                    raise graph.GraphInputError(f"Control input changed since historical audit: {name}")
+            for name, source in (("process_nodes", "legacy_process_nodes"), ("behavior_edges", "legacy_behavior_edges")):
+                if proof["input_sha256"][name] != graph._file_hash(paths[source]):
+                    raise graph.GraphInputError(f"Adapter input changed: {source}")
+            for role in graph.PERIOD_ROLES:
+                path = _behavior_path(paths, role)
+                if proof["output_sha256"][path.name] != graph._file_hash(path):
+                    raise graph.GraphInputError(f"Adapted links changed: {role}")
+            report["controlled_experiment"] = control["controlled_experiment"]
+            report["adapter_reconciliation_passed"] = True
+        except (OSError, ValueError, KeyError) as exc:
+            report["errors"].append(f"Controlled-experiment compatibility: {exc}")
     for name, info in report["files"].items():
         if "sha256" in info and graph._file_hash(paths[name]) != info["sha256"]:
             report["errors"].append(f"Artifact changed during audit: {name}")
@@ -289,22 +440,23 @@ def prepare_inputs(cfg: Inputs) -> dict:
     if not report["audit_passed"]:
         raise graph.GraphInputError("Compatibility audit failed; no graph inputs prepared: " + "; ".join(report["errors"]))
     paths = paths_for(cfg)
-    activity = pd.read_parquet(paths["behavior"])
+    activity = pd.read_parquet(paths["behavior"]) if "behavior" in paths else None
     manifest = {"audit_sha256": graph._file_hash(cfg.work_dir / AUDIT_NAME),
                 "source_sha256": {name: info["sha256"] for name, info in report["files"].items() if "sha256" in info},
                 "graphs": {}, "configuration": {k: str(v) if isinstance(v, Path) else v for k, v in asdict(cfg).items()}}
     for role, prefix in (("verified_benign", "train"), ("evaluation", "evaluation")):
-        destination = cfg.work_dir / f"{role}_behavior.parquet"
-        if destination.exists():
-            raise graph.GraphInputError(f"Refusing existing prepared file: {destination}")
-        partition = activity.loc[activity[cfg.period_column] == role].copy()
-        # Full EDA10 structure_id stays attached to PROCESS nodes; activity's
-        # split_structure_id, if present, remains separate reference metadata.
-        partition.to_parquet(destination, index=False)
+        if activity is None:
+            destination = _behavior_path(paths, role)
+        else:
+            destination = cfg.work_dir / f"{role}_behavior.parquet"
+            if destination.exists():
+                raise graph.GraphInputError(f"Refusing existing prepared file: {destination}")
+            partition = activity.loc[activity[cfg.period_column] == role].copy()
+            partition.to_parquet(destination, index=False)
         builder = _builder_config(cfg, role, paths[prefix + "_features"], paths[prefix + "_create"], destination, paths["feature_policy"])
         manifest["graphs"][role] = {"builder_configuration": {k: str(v) if isinstance(v, Path) else v for k, v in asdict(builder).items()},
                                    "prepared_behavior_sha256": graph._file_hash(destination)}
-    if manifest["source_sha256"]["behavior"] != graph._file_hash(paths["behavior"]):
+    if activity is not None and manifest["source_sha256"]["behavior"] != graph._file_hash(paths["behavior"]):
         raise graph.GraphInputError("Drive behavior source changed during partitioning")
     _write_json(cfg.work_dir / MANIFEST_NAME, manifest)
     return manifest
@@ -345,6 +497,44 @@ def build_both(cfg: Inputs) -> dict:
     return results
 
 
+def legacy_connectivity(cfg: Inputs) -> dict:
+    """Measure the stored old topology, not an inferred summary baseline."""
+    paths = _legacy_paths(cfg)
+    proof = json.loads((cfg.work_dir / "legacy_compatibility_audit.json").read_text())
+    if not proof["passed"]:
+        raise graph.GraphInputError("Historical audit must pass before baseline connectivity")
+    hashes = {name: graph._file_hash(path) for name, path in paths.items()}
+    if any(hashes[name] != proof["files"][name]["sha256"] for name in paths):
+        raise graph.GraphInputError("Historical topology changed before baseline connectivity")
+    processes = pd.read_parquet(paths["legacy_process_nodes"], columns=["period_role", "node_id", cfg.structure_id_column])
+    processes["structure_id"] = processes[cfg.structure_id_column]
+    behaviors = pd.read_parquet(paths["legacy_behavior_edges"], columns=[
+        "period_role", "source_node_id", "target_node_id", "source_node_type", "target_node_type", "behavior_key"])
+    creates = pd.read_parquet(paths["legacy_create_edges"], columns=[
+        "period_role", "source_node_id", "target_node_id", "source_node_type", "target_node_type"])
+    result = {"input_sha256": hashes, "family_metrics_column": cfg.structure_id_column, "periods": {},
+              "measurement": "Computed from stored historical PROCESS/behavior/CREATE topology; not inferred from summary"}
+    rename = {"source_node_id": "source_id", "target_node_id": "target_id",
+              "source_node_type": "source_type", "target_node_type": "target_type"}
+    for role in graph.PERIOD_ROLES:
+        nodes = processes.loc[processes.period_role == role].reset_index(drop=True)
+        behavior = behaviors.loc[behaviors.period_role == role]
+        create = creates.loc[creates.period_role == role]
+        entities = behavior[["target_node_id", "target_node_type", "behavior_key"]].drop_duplicates().rename(
+            columns={"target_node_id": "node_id", "target_node_type": "node_type", "behavior_key": "canonical_key"}).reset_index(drop=True)
+        edges = pd.concat([behavior.drop(columns="behavior_key"), create], ignore_index=True).rename(columns=rename)
+        config = graph.Config(Path(), Path(), Path(), Path(), Path(), role, top_k=10)
+        result["periods"][role] = {
+            "process_node_count": len(nodes), "create_edge_count": len(create), "forward_edge_count": len(edges),
+            **{kind.lower() + "_node_count": int(entities.node_type.eq(kind).sum()) for kind in ("FILE", "MODULE", "DESTINATION")},
+            **graph._connectivity(nodes, entities, edges, config),
+        }
+    if hashes != {name: graph._file_hash(path) for name, path in paths.items()}:
+        raise graph.GraphInputError("Historical topology changed during baseline connectivity")
+    _write_json(cfg.work_dir / "legacy_connectivity_audit.json", result)
+    return result
+
+
 def print_comparison(cfg: Inputs) -> None:
     metrics = ["process_node_count", "file_node_count", "module_node_count", "destination_node_count",
                "forward_edge_count", "create_edge_count", "weakly_connected_component_count",
@@ -367,6 +557,13 @@ def print_comparison(cfg: Inputs) -> None:
         print(pd.DataFrame(top)[["node_type", "canonical_key", "degree", "create_family_count"]].to_string(index=False) if top else "none")
     if rows:
         print(pd.DataFrame(rows).set_index("period_role").T.to_string())
+    if cfg.legacy_inputs and rows:
+        baseline = legacy_connectivity(cfg)
+        print("Measured old vs hybrid topology (same historical sources, period-local CREATE families):")
+        compare = [{"period": row["period_role"], "metric": metric,
+                    "old": baseline["periods"][row["period_role"]][metric], "hybrid": row[metric]}
+                   for row in rows for metric in metrics]
+        print(pd.DataFrame(compare).to_string(index=False))
     previous = paths_for(cfg)["previous_graph_summary"]
     if previous.is_file():
         try:
@@ -392,17 +589,20 @@ def print_comparison(cfg: Inputs) -> None:
         if comparisons:
             print("Comparable stored counts (hybrid minus old):")
             print(pd.DataFrame(comparisons).to_string(index=False))
-        print("Old WCC concentration, context degrees and family sharing: unavailable; no inferred comparison")
+        print("Old summary has no WCC/degree/sharing fields; any topology baseline above was measured from source Parquets")
     else:
         print("Previous graph summary unavailable")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("audit", "prepare", "build", "compare"))
+    parser.add_argument("phase", choices=("legacy-audit", "legacy-adapt", "audit", "prepare", "build", "compare"))
     parser.add_argument("--data-root", required=True, type=Path)
     parser.add_argument("--work-dir", required=True, type=Path)
     parser.add_argument("--behavior-table", type=Path)
+    parser.add_argument("--behavior-links-dir", type=Path)
+    parser.add_argument("--legacy-inputs", action="store_true")
+    parser.add_argument("--context-key-policy", choices=("canonical_v1", "exact_behavior_key_v1"), default="canonical_v1")
     for name in Inputs.__dataclass_fields__:
         if name.endswith("column"):
             parser.add_argument("--" + name.replace("_", "-"), default=Inputs.__dataclass_fields__[name].default)
@@ -410,6 +610,13 @@ def main(argv: list[str] | None = None) -> int:
     phase = args.pop("phase")
     cfg = Inputs(**args)
     try:
+        if phase == "legacy-audit":
+            report = audit_legacy_inputs(cfg)
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0 if report["passed"] else 2
+        if phase == "legacy-adapt":
+            print(json.dumps(adapt_legacy_inputs(cfg), indent=2, sort_keys=True))
+            return 0
         if phase == "audit":
             report = audit_inputs(cfg)
             print(json.dumps(report, indent=2, sort_keys=True))

@@ -4,22 +4,22 @@
 >
 > **Evidence precedence:** executed repository artifacts and saved run metadata > current code and tests > explicitly supplied historical context > `NEEDS VERIFICATION`. A historical claim is not promoted to current fact merely because it appears in this file.
 >
-> **Last Updated:** 2026-10-01 22:49 PDT
+> **Last Updated:** 2026-10-02 (America/Los_Angeles)
 >
-> **Last Verified:** 2026-10-01
+> **Last Verified:** 2026-10-02
 >
-> **Verified Git HEAD before runner commit:** `367ff8ff2a99f96363609469a3b54632dc5c58f6`
+> **Verified Git HEAD before adapter commit:** `b95302d2766660add5cda8c3ed2378e5a8047c07`
 > **Repository visibility:** public GitHub repository. Confidential research direction is intentionally excluded.
 
 ## 1. One-paragraph project summary
 
-This project studies large-scale endpoint telemetry from the corrected DARPA Operationally Transparent Cyber (OpTC) dataset using provenance-oriented graph construction, leakage-safe temporal separation, graph representation learning, anomaly detection, and investigation workflows. The repository implements streaming ingestion and EDA stages through EDA10, plus a period-wide heterogeneous graph builder tested with synthetic inputs. EDA10 defines process-family metadata from `PROCESS CREATE`; the hybrid graph preserves that metadata and CREATE topology while sharing FILE, MODULE, and DESTINATION context across families inside each period. Graphs are independently period-namespaced. A real Drive schema audit recovered the exact final 70-feature policy and verified PROCESS/CREATE consistency, but graph execution is blocked by missing period-assigned behavior links. The checkout contains the runner and audit report, not raw Drive Parquets, six-host caches, a trained RGCN, embeddings or evaluation results. Six-host claims remain unverified; recovered SysClient0201 summary counts are distinguished from re-executed results. No model-performance claim is supported.
+This project studies large-scale endpoint telemetry from the corrected DARPA Operationally Transparent Cyber (OpTC) dataset using provenance graphs, leakage-safe temporal separation, graph representation learning, anomaly detection and investigation workflows. EDA stages through EDA10, the hybrid graph builder, a lossless historical behavior adapter and the thin Colab runner are implemented. Both real SysClient0201 hybrid graphs have now been built locally from authentic Drive artifacts, preserving the 70 features, explicit periods, CREATE topology, relations, literal context keys and event counts. Sharing context alone increases largest-component PROCESS concentration from 57.836% to 99.990% in training and 77.543% to 98.532% in evaluation. Common Windows modules dominate the hubs. Complete outputs are preserved in ignored local storage; evaluation is fully published to Drive, while two oversized training edge files remain blocked by connector limits. No Colab runtime, RGCN training, embeddings or model evaluation occurred; no model-performance claim is supported. Other six-host claims remain unverified.
 
 ## 2. Current research objective
 
 ### Current objective
 
-Construct and audit hybrid provenance connectivity, preserving CREATE-family metadata while sharing context nodes across families within each period. The builder and guarded Colab runner are implemented. A read-only audit of authentic Drive artifacts verified the 70-feature policy and both PROCESS/CREATE universes, but the known activity file has no behavior keys/actions. Obtain explicitly period-assigned behavior links before building either graph. Model training remains outside this milestone.
+Interpret the completed controlled connectivity experiment and finish training-output Drive publication through a direct filesystem/Colab route. The historical RGCN behavior artifact resolves the earlier aggregate-activity blocker. Both real graphs are complete locally and show near-total PROCESS component collapse. Keep all entities and leave model training outside this milestone; utility/noise and detection performance are not yet measured.
 
 ### Long-term private research direction
 
@@ -32,8 +32,7 @@ Intentionally omitted. This repository is public, so confidential research direc
 - **Remote:** `https://github.com/farzaandalwai/DARPA_OPTC_EDA.git`
 - **Visibility:** public, verified 2026-09-30
 - **Branch:** `eda08`, tracking `origin/eda08`
-- **HEAD before runner commit:** `367ff8ff2a99f96363609469a3b54632dc5c58f6` (`Add period-wide heterogeneous provenance graph builder`), pushed to `origin/eda08`.
-- **HEAD authored:** 2026-10-01 22:29:36 -0700
+- **HEAD before adapter commit:** `b95302d2766660add5cda8c3ed2378e5a8047c07` (`Add guarded SysClient0201 Colab hybrid graph runner`), pushed to `origin/eda08`.
 - **Important directories:**
   - `src/eda/` — canonical ingestion and EDA1–EDA10 code.
   - `tests/` — canonical test suite.
@@ -48,14 +47,15 @@ Intentionally omitted. This repository is public, so confidential research direc
   - `src/eda/build_normalized_pilot_cache.py`
   - `src/eda/build_period_heterogeneous_graph.py` — new hybrid graph builder and CLI.
   - `src/eda/prepare_sysclient0201_hybrid_graph.py` — real-artifact compatibility gate, local role partitioning, builder invocation and comparison.
+  - `src/eda/adapt_structure_scoped_behavior_links.py` — audited, lossless conversion of historical explicit-period behavior evidence.
   - `src/eda/eda_01_dataset_intake.py` through `src/eda/eda_10_continuous_process_structure.py`
   - `src/eda/optc_streaming_parser.py`, `src/eda/cache_resume.py`, and `src/eda/manifest_utils.py`
 - **Important notebooks:** `colab/run_sysclient0201_hybrid_graph.ipynb`; mounts Drive, synchronizes `eda08` into `/content/DARPA_OPTC_EDA`, prints branch/HEAD, confirms mount, then invokes repository logic. No saved execution outputs.
-- **Tracked artifact directories:** only EDA1 CSV/PNG/TXT outputs are populated. `outputs/graphs/`, `outputs/json/`, and `outputs/evidence/` contain only `.gitkeep`; no EDA9/EDA10/model output exists in the checkout.
+- **Tracked artifacts:** EDA1 outputs and schema/connectivity audit reports, not raw data or models. Complete real graph outputs, adapter links and input snapshots are preserved under ignored `data/local_runs/sysclient0201_hybrid_graph_v1/{artifacts,work}/`.
 - **Saved metadata/configuration:** `data/period_maps/optc_pilot_period_map_v1.{csv,md}`, `configs/eda_01_*_paths.example.json`, EDA1 intake CSV/TXT files, and code-generated run schemas.
 - **Untracked pre-existing material:** `.cursor/`, six EDA9/EDA10 review directories, and corresponding ZIP files. These review copies contain source/tests/diffs, not executed research artifacts. They also cause repository-root `pytest` collection-name collisions.
 - **Verification:** `python3 -m pytest -q tests` passed **519 tests** with 3 timestamp deprecation warnings on 2026-09-30. Focused EDA9/EDA10/period-map tests passed **89 tests**. Running `python3 -m pytest -q` from the repository root failed at collection with 6 import-file-mismatch errors because duplicate test filenames exist in the untracked review directories.
-- **New builder verification:** builder plus runner focused suite passed **65 tests** on 2026-10-01. The current canonical suite passed **584 tests**, with 3 pre-existing timestamp deprecation warnings; the builder/tests were committed and pushed in `367ff8f`. Runner tests are synthetic, not real connectivity results.
+- **Current verification:** adapter/builder/runner focused suite **102 passed**; canonical suite **621 passed**, 3 pre-existing timestamp warnings, on 2026-10-02. Tests are synthetic; the separately saved real-run report contains dataset measurements.
 - **State caveat:** the branch name remains `eda08` even though commits on it include EDA9 and EDA10. Treat commit identity, not the branch label, as authoritative.
 - **Tracked EDA1-output conflict:** `outputs/eda_01_intake/README_eda01_intake.txt` records a `/private/tmp` zero-byte test run, `T1_dataset_intake_ledger.csv` records a local 12.5 GB 2019-09-16 archive, and `T1B_master_archive_inventory.csv` marks all ten archives pending. These files came from different/stale runs and must not be combined as one current intake result.
 
@@ -253,7 +253,7 @@ Critical rules:
 
 ## 14. Heterogeneous RGCN-ready graph
 
-SysClient0201 graph counts below match the readable historical Drive `rgcn_graph_summary_v1.csv` on 2026-10-01; old graph edges were not revalidated and its builder source remains absent:
+SysClient0201 graph counts below match the readable historical Drive summary. On 2026-10-02, legacy PROCESS, behavior and CREATE source tables were validated and their period-isolated topology measured directly. The old builder source remains absent; the separate old combined-edge file was not rerun/revalidated.
 
 - PROCESS nodes: **79,745 total** = 71,369 train + 8,376 evaluation.
 - Context entity types: FILE, MODULE, DESTINATION.
@@ -285,7 +285,7 @@ Output schema version is `period_heterogeneous_graph_v1`. Its six files are `het
 
 Context IDs include period role, node type, canonical value, and configured host scope; they exclude family IDs. FILE/MODULE identity uses EDA5 separator-only path normalization. DESTINATION uses canonical address/port/protocol. Bracketed IPv6 endpoints are required to disambiguate ports; a valid unbracketed IPv6 endpoint is treated as address-only. Single-host inputs may set `--host-scope`; multi-host tables should set `--host-column`. Context degree counts unique PROCESS neighbors. All high-degree entities are retained; family sharing, weak components, degree summaries, CREATE reconciliation, feature policy, and hashes are audited.
 
-Only synthetic graph builds have been run. The real 70-feature schema is compatible, but real graph connectivity, runtime and memory remain unmeasured. V1 loads compact tables into memory and streams bidirectional output in batches. EDA10 is unchanged.
+Both real-period graphs have been built locally; connectivity is saved below. Production Colab runtime/peak memory have not been measured. V1 loads compact tables into memory and streams bidirectional output in batches. EDA10 is unchanged. The new opt-in `exact_behavior_key_v1` policy bypasses all path/endpoint reinterpretation and host scoping for the controlled historical comparison; the generic `canonical_v1` default is unchanged.
 
 ### Real-artifact compatibility gate and Colab runner (2026-10-01)
 
@@ -299,6 +299,19 @@ Authentic Drive downloads were audited locally, without modifying source artifac
 - Do not recover links by timestamp-splitting original full-timeline compact behavior. The runner requires an inspected, explicitly assigned behavior artifact and re-audits before partitioning locally under `/content/`.
 - Intended output directories are `eda_10_sysclient0201_hybrid_graph_verified_benign_v1` and `eda_10_sysclient0201_hybrid_graph_evaluation_v1` under the Drive artifact root. Existing outputs are never overwritten.
 - The old summary stores node/edge counts, not WCC concentration, degree or family-sharing statistics; those comparisons remain unavailable. No pruning or model training occurred.
+
+### Historical adapter and first real controlled experiment (2026-10-02)
+
+The earlier blocker is resolved by `eda_10_sysclient0201_rgcn_graph_v1/hetero_behavior_edges_forward_v1.parquet` and `hetero_process_nodes_v1.parquet`. The adapter joins `(period_role, source_node_id)` to historical PROCESS `(period_role, node_id)`; 248 node IDs recur across periods, so a global-ID-only join would be unsafe. It keeps raw keys and metadata, maps all nine behavior relations exactly, sums duplicate counts and reconciles min/max evidence times. It never assigns periods from timestamps or uses old target IDs as new identity.
+
+- **Reconciliation:** 2,984,435 source links become 2,679,817 train and 304,618 evaluation links; this real input has no duplicate collapsed links. All **28,320,862 behavior events** reconcile, including each period/relation. Unmatched PROCESS sources, period mismatches and family mismatches are all zero.
+- **Controlled inputs:** all 70 PROCESS features and both original family columns match historical PROCESS nodes exactly; historical CREATE topology and event counts match both current CREATE tables. Canonical `structure_id` is explicitly mapped from period-rebuilt `split_structure_id` for this comparison; full EDA10 `reference_full_structure_id` remains untouched metadata. Family metrics use 4,815 train / 838 evaluation period-local families.
+- **Train:** 71,369 PROCESS, 55,758 FILE, 2,844 MODULE, 142 DESTINATION; 2,746,371 forward edges and 66,554 CREATE edges. WCCs **4,815 old → 8 hybrid**; largest-component PROCESS count **41,277 → 71,362**, concentration **57.836% → 99.990%**. Shared contexts **35,316**, families connected through shared context **4,808**; context max/p95 degree **63,784 / 37**.
+- **Evaluation:** 8,376 PROCESS, 13,249 FILE, 1,413 MODULE, 357 DESTINATION; 312,156 forward edges and 7,538 CREATE edges. WCCs **838 old → 124 hybrid**; largest-component PROCESS count **6,495 → 8,253**, concentration **77.543% → 98.532%**. Shared contexts **5,325**, connected families **715**; context max/p95 degree **7,273 / 30**.
+- **Hubs:** `\\windows\\system32\\kernel32.dll`, `\\systemroot\\system32\\ntdll.dll`, `\\windows\\system32\\user32.dll` lead both periods. Degree means unique PROCESS neighbors, not event multiplicity. Full top-10 lists, input/output hashes, adapter audits and measured old baselines are in `reports/sysclient0201_hybrid_graph_real_run_v1.json`.
+- **Interpretation:** scope sharing produces near-total PROCESS component collapse. Whether that context is useful or noisy for representation learning is unmeasured. No pruning, training or EDA10 changes occurred.
+- **Execution/publication:** this was a local execution using authentic Drive snapshots, not a Colab runtime. Complete local data are preserved in ignored `data/local_runs/sysclient0201_hybrid_graph_v1/`. Evaluation's six outputs are uploaded and SHA256-readback verified. Training's four smaller outputs are similarly verified, but the 339 MiB forward and 684 MiB bidirectional files exceed connector limits. Both Drive folders have explicit `publication_status.json`; training publication is partial, not complete.
+- **Colab safety:** the updated notebook audits historical sources, runs the adapter, audits controlled compatibility, feeds both explicit local link files directly to the existing builder and prints measured old/hybrid connectivity. It still refuses existing destinations. Preserve/resolve the existing partial/completed Drive folders before a fresh Colab rerun; do not overwrite them implicitly.
 
 ## 15. Intended first model experiment
 
@@ -325,7 +338,7 @@ Planned design:
 9. **Sampling:** no full-batch feasibility result or neighbor/subgraph sampling strategy is defined for the historical graph scale.
 10. **Available hardware:** observed 2026-09-30 as an Apple M4 MacBook Air with 10 CPU cores and 24 GB unified memory; approximately 104 GiB filesystem space was free. EDA10 defaults to a 4 GB DuckDB memory limit and 2 threads. No PyTorch/MPS/CUDA stack is declared in `requirements.txt`, so accelerator readiness is **NEEDS VERIFICATION**.
 11. **Artifact locations and hashes:** SysClient0201 feature/split/policy artifacts have been recovered and hashed; other six-host caches/results remain unknown.
-12. **Behavior inputs:** the final 70-feature policy passes, but the known period activity file lacks behavior/context columns. Explicitly period-assigned behavior links are the current hard blocker.
+12. **Graph publication:** behavior compatibility is resolved and both graphs are complete locally. Training's two edge files exceed transfer limits; direct Colab/Drive filesystem publication remains unfinished.
 13. **Ground-truth overlay implementation:** absent; actorID mapping needs code and audit trail.
 14. **Period-map scope:** repository provenance limits the current period map to the fixed 10 GB pilot; full-host use must be revalidated.
 15. **Test discovery:** root-level `pytest` is blocked by duplicate untracked review-copy test filenames; canonical `pytest tests` succeeds.
@@ -347,7 +360,7 @@ The confidential long-term research direction is deliberately not named or descr
 | Item | Status | Evidence | Artifact/path | Last verified |
 |---|---|---|---|---|
 | Streaming/cache/EDA1–EDA10 code | COMPLETE | Canonical modules import and canonical suite passes | `src/eda/`, `tests/` | 2026-09-30 |
-| Canonical repository test suite | COMPLETE | 584 passed, 3 pre-existing deprecation warnings | `tests/` | 2026-10-01 |
+| Canonical repository test suite | COMPLETE | 621 passed, 3 pre-existing deprecation warnings | `tests/` | 2026-10-02 |
 | Root-level test discovery | BLOCKED | 6 collection errors from duplicate untracked review tests | Untracked `eda09_*_review/`, `eda10_*_review/` | 2026-09-30 |
 | Pilot period map | COMPLETE | Tracked CSV, provenance, tests | `data/period_maps/optc_pilot_period_map_v1.{csv,md}` | 2026-09-30 |
 | EDA9 authoritative run | PLANNED | Builder/tests exist; no run output found | Expected caller-provided output directory | 2026-09-30 |
@@ -359,8 +372,10 @@ The confidential long-term research direction is deliberately not named or descr
 | 70-feature policy compatibility | COMPLETE | Exact ordered policy applies to both real PROCESS tables | Saved compatibility audit; Drive policy JSON | 2026-10-01 |
 | SysClient0201 historical RGCN graph | NEEDS VERIFICATION | Drive summary readable; edge validation and builder source absent | `eda_10_sysclient0201_rgcn_graph_v1` on Drive | 2026-10-01 |
 | Hybrid period-wide graph builder | COMPLETE | Implementation and 48 synthetic tests pass; real runs pending | `src/eda/build_period_heterogeneous_graph.py`, `tests/test_period_heterogeneous_graph.py` | 2026-10-01 |
-| Thin Colab runner | COMPLETE | Mount/sync/version/mount checks; guarded repository phases; focused tests | `colab/run_sysclient0201_hybrid_graph.ipynb` | 2026-10-01 |
-| Real-period hybrid connectivity experiment | BLOCKED | Explicitly assigned activity contains aggregate counts, no context links | No production hybrid outputs | 2026-10-01 |
+| Historical behavior adapter | COMPLETE | All real events/relations reconcile; explicit-role source join and raw keys | `src/eda/adapt_structure_scoped_behavior_links.py`; saved real-run report | 2026-10-02 |
+| Thin Colab runner | COMPLETE | Historical audit/adapter/control/independent builds and measured comparison | `colab/run_sysclient0201_hybrid_graph.ipynb`; runtime not executed | 2026-10-02 |
+| Real-period hybrid connectivity experiment | COMPLETE | Both graphs executed locally, near-total component collapse measured | Ignored local run; saved real-run report | 2026-10-02 |
+| Drive graph publication | PARTIAL | Evaluation complete; training lacks two oversized edge files | Two Drive output folders with publication status | 2026-10-02 |
 | Non-PROCESS node initialization | BLOCKED | No implementation or documented decision | None | 2026-09-30 |
 | RGCN encoder and objective | PLANNED | No implementation/dependency found | None | 2026-09-30 |
 | RGCN training / PROCESS embeddings | PLANNED | No executed result or checkpoint found | None | 2026-09-30 |
@@ -373,7 +388,7 @@ The confidential long-term research direction is deliberately not named or descr
 
 ### CURRENT NEXT EXPERIMENT
 
-**First real-period hybrid connectivity audit:** obtain explicitly period-assigned behavior links with action/object/context keys; the known activity aggregate is insufficient. Re-run the guarded Colab audit, then build both graphs independently if it passes and compare family sharing, giant-component concentration and high-degree entities. The 70-feature policy and existing PROCESS/CREATE inputs have passed the real-artifact audit. Preserve all entities; do not start RGCN or One-Class SVM work.
+**After the first controlled run:** finish training-output Drive publication through a direct Colab/filesystem route without silently overwriting existing output folders, then review whether the common-module-driven component collapse warrants a separately authorized follow-up experiment. Keep all entities for this baseline. Do not start RGCN or One-Class SVM work.
 
 ## 21. Research safeguards
 
@@ -400,9 +415,11 @@ The confidential long-term research direction is deliberately not named or descr
 - Preserved high-degree entities and left EDA10 unchanged.
 - Committed and pushed builder/tests/research docs in `367ff8ff2a99f96363609469a3b54632dc5c58f6`, leaving review archives/directories and `.cursor/` untracked.
 - Created the thin Colab runner plus repository audit/orchestration module and focused contract tests.
-- Audited authentic Drive artifact schemas/hashes locally: the final 70-feature policy and PROCESS/CREATE reconciliation pass; behavior compatibility fails because the period activity file has no context links.
-- Saved the exact schemas, feature names, input counts, hashes and failure in the compatibility report. No Colab runtime or real graph construction occurred; no Drive source was modified.
-- Next step is to supply explicitly period-assigned behavior links; no model implementation or training occurred.
+- Recovered historical explicit-period behavior links and added the lossless adapter, exact-key policy and controlled PROCESS/CREATE equivalence gate. EDA10 is unchanged.
+- Ran both real hybrid graphs locally and measured the old source topology; largest PROCESS share increases to 99.990% / 98.532%, driven by common Windows module hubs.
+- All 28,320,862 behavior events reconcile with zero source/period/family mismatches. Saved full audits/hashes/baselines; complete data are preserved in ignored local storage.
+- Evaluation is fully uploaded and verified; training's two large edge files hit connector limits. Drive status markers distinguish graph completion from partial publication. No original Drive source was modified.
+- Focused tests 102 passed; canonical tests 621 passed, 3 pre-existing warnings. No Colab runtime, pruning, model implementation or training occurred.
 
 ## 23. Next-session startup instructions
 

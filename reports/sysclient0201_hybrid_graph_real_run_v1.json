@@ -1,0 +1,2375 @@
+{
+  "adapter_audit": {
+    "context_counts_by_period": {
+      "evaluation": {
+        "old_context_nodes_collapsed_by_sharing": 30921,
+        "unique_new_type_key_count": 15019,
+        "unique_old_context_node_count": 45940
+      },
+      "verified_benign": {
+        "old_context_nodes_collapsed_by_sharing": 238014,
+        "unique_new_type_key_count": 58744,
+        "unique_old_context_node_count": 296758
+      }
+    },
+    "context_identity": [
+      "period_role",
+      "target_node_type",
+      "behavior_key"
+    ],
+    "duplicate_links_aggregated": 0,
+    "errors": [],
+    "event_count_total_after": 28320862,
+    "event_count_total_before": 28320862,
+    "input_sha256": {
+      "behavior_edges": "3017b2dfcc9e713cd97f1c98869d0d3d23a18979eee94204b7a76c1e305ab919",
+      "process_nodes": "896193d086d3525f0366dd214423665dcfca99f2838b7d0e219027e8c65fb0b0"
+    },
+    "inputs": {
+      "behavior_edges": {
+        "column_types": {
+          "behavior_key": "string",
+          "event_count": "int64",
+          "first_seen_time": "timestamp[us]",
+          "last_seen_time": "timestamp[us]",
+          "period_role": "string",
+          "relation_type": "string",
+          "source_node_id": "string",
+          "source_node_type": "string",
+          "split_structure_id": "string",
+          "target_node_id": "string",
+          "target_node_type": "string"
+        },
+        "columns": [
+          "period_role",
+          "split_structure_id",
+          "source_node_id",
+          "source_node_type",
+          "target_node_id",
+          "target_node_type",
+          "relation_type",
+          "behavior_key",
+          "event_count",
+          "first_seen_time",
+          "last_seen_time"
+        ],
+        "path": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_rgcn_graph_v1/hetero_behavior_edges_forward_v1.parquet",
+        "row_count": 2984435
+      },
+      "process_nodes": {
+        "column_types": {
+          "behavior_event_count_total": "double",
+          "behavior_events__DESTINATION": "double",
+          "behavior_events__FILE": "double",
+          "behavior_events__MODULE": "double",
+          "behavior_events_per_second": "double",
+          "child_count": "int64",
+          "depth_from_root": "int64",
+          "distinct_behavior_keys_total": "double",
+          "distinct_behavior_rows": "double",
+          "distinct_keys__DESTINATION": "double",
+          "distinct_keys__FILE": "double",
+          "distinct_keys__MODULE": "double",
+          "distinct_process_open_target_count": "double",
+          "distinct_registry_key_count": "double",
+          "distinct_shell_context_count": "double",
+          "distinct_shell_payload_count": "double",
+          "distinct_thread_target_process_count": "double",
+          "event__DESTINATION__MESSAGE": "double",
+          "event__DESTINATION__START": "double",
+          "event__FILE__CREATE": "double",
+          "event__FILE__DELETE": "double",
+          "event__FILE__MODIFY": "double",
+          "event__FILE__READ": "double",
+          "event__FILE__RENAME": "double",
+          "event__FILE__WRITE": "double",
+          "event__MODULE__LOAD": "double",
+          "event__PROCESS__OPEN": "double",
+          "event__PROCESS__TERMINATE": "double",
+          "event__REGISTRY__ADD": "double",
+          "event__REGISTRY__EDIT": "double",
+          "event__REGISTRY__REMOVE": "double",
+          "event__SHELL__COMMAND": "double",
+          "event__THREAD__CREATE": "double",
+          "event__THREAD__REMOTE_CREATE": "double",
+          "event__THREAD__TERMINATE": "double",
+          "extended_behavior_event_count_total": "double",
+          "has_children": "int8",
+          "has_process_open": "double",
+          "has_registry_activity": "double",
+          "has_remote_thread_create": "double",
+          "has_shell_command": "double",
+          "image_path_depth": "double",
+          "image_path_missing": "double",
+          "image_path_other": "double",
+          "image_path_other_executable": "double",
+          "image_path_program_files": "double",
+          "image_path_user_directory": "double",
+          "image_path_windows_other": "double",
+          "image_path_windows_system32": "double",
+          "incoming_create_event_count": "int64",
+          "is_leaf": "int8",
+          "is_root": "int8",
+          "log_behavior_event_count": "double",
+          "log_child_count": "double",
+          "log_distinct_behavior_keys": "double",
+          "log_event_count": "double",
+          "log_process_lifetime_sec": "double",
+          "node_id": "string",
+          "node_type": "string",
+          "outgoing_create_event_count": "int64",
+          "parent_count": "int64",
+          "parent_path_depth": "double",
+          "parent_path_missing": "double",
+          "parent_path_other": "double",
+          "parent_path_other_executable": "double",
+          "parent_path_program_files": "double",
+          "parent_path_windows_other": "double",
+          "parent_path_windows_system32": "double",
+          "period_role": "string",
+          "process_id": "string",
+          "process_lifetime_sec": "double",
+          "process_noncreate_event_count_total": "double",
+          "reference_full_structure_id": "string",
+          "registry_event_count_total": "double",
+          "split_structure_id": "string",
+          "thread_event_count_total": "double"
+        },
+        "columns": [
+          "period_role",
+          "split_structure_id",
+          "node_id",
+          "node_type",
+          "process_id",
+          "reference_full_structure_id",
+          "log_event_count",
+          "process_lifetime_sec",
+          "log_process_lifetime_sec",
+          "image_path_depth",
+          "parent_path_depth",
+          "parent_count",
+          "child_count",
+          "incoming_create_event_count",
+          "outgoing_create_event_count",
+          "is_root",
+          "is_leaf",
+          "has_children",
+          "depth_from_root",
+          "behavior_event_count_total",
+          "distinct_behavior_rows",
+          "distinct_behavior_keys_total",
+          "behavior_events_per_second",
+          "log_behavior_event_count",
+          "log_distinct_behavior_keys",
+          "log_child_count",
+          "image_path_missing",
+          "image_path_other",
+          "image_path_other_executable",
+          "image_path_program_files",
+          "image_path_user_directory",
+          "image_path_windows_other",
+          "image_path_windows_system32",
+          "parent_path_missing",
+          "parent_path_other",
+          "parent_path_other_executable",
+          "parent_path_program_files",
+          "parent_path_windows_other",
+          "parent_path_windows_system32",
+          "behavior_events__DESTINATION",
+          "behavior_events__FILE",
+          "behavior_events__MODULE",
+          "distinct_keys__DESTINATION",
+          "distinct_keys__FILE",
+          "distinct_keys__MODULE",
+          "event__DESTINATION__MESSAGE",
+          "event__DESTINATION__START",
+          "event__FILE__CREATE",
+          "event__FILE__DELETE",
+          "event__FILE__MODIFY",
+          "event__FILE__READ",
+          "event__FILE__RENAME",
+          "event__FILE__WRITE",
+          "event__MODULE__LOAD",
+          "extended_behavior_event_count_total",
+          "event__SHELL__COMMAND",
+          "distinct_shell_payload_count",
+          "distinct_shell_context_count",
+          "event__THREAD__CREATE",
+          "event__THREAD__REMOTE_CREATE",
+          "event__THREAD__TERMINATE",
+          "thread_event_count_total",
+          "distinct_thread_target_process_count",
+          "event__REGISTRY__ADD",
+          "event__REGISTRY__EDIT",
+          "event__REGISTRY__REMOVE",
+          "registry_event_count_total",
+          "distinct_registry_key_count",
+          "event__PROCESS__OPEN",
+          "event__PROCESS__TERMINATE",
+          "process_noncreate_event_count_total",
+          "distinct_process_open_target_count",
+          "has_shell_command",
+          "has_remote_thread_create",
+          "has_registry_activity",
+          "has_process_open"
+        ],
+        "path": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_rgcn_graph_v1/hetero_process_nodes_v1.parquet",
+        "row_count": 79745
+      }
+    },
+    "key_policy": "Literal behavior_key preserved; old target_node_id excluded",
+    "metadata_columns_preserved": [
+      "split_structure_id",
+      "reference_full_structure_id"
+    ],
+    "old_context_nodes_collapsed_by_sharing": 268935,
+    "output_row_count_by_period": {
+      "evaluation": 304618,
+      "verified_benign": 2679817
+    },
+    "output_sha256": {
+      "evaluation_behavior_links_v1.parquet": "cba430d1f0564d8fca1a1ef947038287cdaa1618287d6a39d3235d48b3bd378a",
+      "verified_benign_behavior_links_v1.parquet": "71a5d5015ef8575237d2121fe5484fbdbd37e0af57a90b6d96d034b295802d97"
+    },
+    "passed": true,
+    "period_assignment": "Explicit period_role only; timestamps never assign periods",
+    "period_mismatches": 0,
+    "process_join": [
+      "period_role",
+      "source_node_id -> node_id"
+    ],
+    "relation_counts_after": {
+      "evaluation": {
+        "PROCESS_DESTINATION_MESSAGE": {
+          "event_count": 886594,
+          "row_count": 351
+        },
+        "PROCESS_DESTINATION_START": {
+          "event_count": 2250826,
+          "row_count": 545
+        },
+        "PROCESS_FILE_CREATE": {
+          "event_count": 46477,
+          "row_count": 3818
+        },
+        "PROCESS_FILE_DELETE": {
+          "event_count": 10814,
+          "row_count": 2953
+        },
+        "PROCESS_FILE_MODIFY": {
+          "event_count": 191166,
+          "row_count": 7202
+        },
+        "PROCESS_FILE_READ": {
+          "event_count": 145254,
+          "row_count": 61860
+        },
+        "PROCESS_FILE_RENAME": {
+          "event_count": 19523,
+          "row_count": 909
+        },
+        "PROCESS_FILE_WRITE": {
+          "event_count": 115413,
+          "row_count": 5295
+        },
+        "PROCESS_MODULE_LOAD": {
+          "event_count": 236036,
+          "row_count": 221685
+        }
+      },
+      "verified_benign": {
+        "PROCESS_DESTINATION_MESSAGE": {
+          "event_count": 5561751,
+          "row_count": 3354
+        },
+        "PROCESS_DESTINATION_START": {
+          "event_count": 13059255,
+          "row_count": 2958
+        },
+        "PROCESS_FILE_CREATE": {
+          "event_count": 302397,
+          "row_count": 37677
+        },
+        "PROCESS_FILE_DELETE": {
+          "event_count": 92736,
+          "row_count": 27800
+        },
+        "PROCESS_FILE_MODIFY": {
+          "event_count": 1234589,
+          "row_count": 60544
+        },
+        "PROCESS_FILE_READ": {
+          "event_count": 1251529,
+          "row_count": 582536
+        },
+        "PROCESS_FILE_RENAME": {
+          "event_count": 118727,
+          "row_count": 7994
+        },
+        "PROCESS_FILE_WRITE": {
+          "event_count": 741807,
+          "row_count": 49467
+        },
+        "PROCESS_MODULE_LOAD": {
+          "event_count": 2055968,
+          "row_count": 1907487
+        }
+      }
+    },
+    "relation_counts_before": {
+      "evaluation": {
+        "PROCESS_DESTINATION_MESSAGE": {
+          "event_count": 886594,
+          "row_count": 351
+        },
+        "PROCESS_DESTINATION_START": {
+          "event_count": 2250826,
+          "row_count": 545
+        },
+        "PROCESS_FILE_CREATE": {
+          "event_count": 46477,
+          "row_count": 3818
+        },
+        "PROCESS_FILE_DELETE": {
+          "event_count": 10814,
+          "row_count": 2953
+        },
+        "PROCESS_FILE_MODIFY": {
+          "event_count": 191166,
+          "row_count": 7202
+        },
+        "PROCESS_FILE_READ": {
+          "event_count": 145254,
+          "row_count": 61860
+        },
+        "PROCESS_FILE_RENAME": {
+          "event_count": 19523,
+          "row_count": 909
+        },
+        "PROCESS_FILE_WRITE": {
+          "event_count": 115413,
+          "row_count": 5295
+        },
+        "PROCESS_MODULE_LOAD": {
+          "event_count": 236036,
+          "row_count": 221685
+        }
+      },
+      "verified_benign": {
+        "PROCESS_DESTINATION_MESSAGE": {
+          "event_count": 5561751,
+          "row_count": 3354
+        },
+        "PROCESS_DESTINATION_START": {
+          "event_count": 13059255,
+          "row_count": 2958
+        },
+        "PROCESS_FILE_CREATE": {
+          "event_count": 302397,
+          "row_count": 37677
+        },
+        "PROCESS_FILE_DELETE": {
+          "event_count": 92736,
+          "row_count": 27800
+        },
+        "PROCESS_FILE_MODIFY": {
+          "event_count": 1234589,
+          "row_count": 60544
+        },
+        "PROCESS_FILE_READ": {
+          "event_count": 1251529,
+          "row_count": 582536
+        },
+        "PROCESS_FILE_RENAME": {
+          "event_count": 118727,
+          "row_count": 7994
+        },
+        "PROCESS_FILE_WRITE": {
+          "event_count": 741807,
+          "row_count": 49467
+        },
+        "PROCESS_MODULE_LOAD": {
+          "event_count": 2055968,
+          "row_count": 1907487
+        }
+      }
+    },
+    "relation_mapping": {
+      "PROCESS_DESTINATION_MESSAGE": [
+        "DESTINATION",
+        "MESSAGE"
+      ],
+      "PROCESS_DESTINATION_START": [
+        "DESTINATION",
+        "START"
+      ],
+      "PROCESS_FILE_CREATE": [
+        "FILE",
+        "CREATE"
+      ],
+      "PROCESS_FILE_DELETE": [
+        "FILE",
+        "DELETE"
+      ],
+      "PROCESS_FILE_MODIFY": [
+        "FILE",
+        "MODIFY"
+      ],
+      "PROCESS_FILE_READ": [
+        "FILE",
+        "READ"
+      ],
+      "PROCESS_FILE_RENAME": [
+        "FILE",
+        "RENAME"
+      ],
+      "PROCESS_FILE_WRITE": [
+        "FILE",
+        "WRITE"
+      ],
+      "PROCESS_MODULE_LOAD": [
+        "MODULE",
+        "LOAD"
+      ]
+    },
+    "schema_version": "structure_scoped_behavior_adapter_v1",
+    "source_period_row_counts": {
+      "evaluation": 304618,
+      "verified_benign": 2679817
+    },
+    "source_process_period_row_counts": {
+      "evaluation": 8376,
+      "verified_benign": 71369
+    },
+    "source_process_row_count": 79745,
+    "source_row_count": 2984435,
+    "structure_mismatches": 0,
+    "unique_new_type_key_count": 73763,
+    "unique_old_context_node_count": 342698,
+    "unmatched_source_process_count": 0,
+    "unmatched_source_row_count": 0
+  },
+  "base_git_head": "b95302d2766660add5cda8c3ed2378e5a8047c07",
+  "baseline_execution_runner_sha256": "d85ae5a3e799a9035bd594276e87748fc5ebe5e8a1475c5b5e49aa1aebf99100",
+  "both_hybrid_graphs_completed": true,
+  "compatibility_audit_passed": true,
+  "controlled_experiment": {
+    "evaluation": {
+      "create_rows": 7538,
+      "create_topology_and_counts_identical": true,
+      "feature_count": 70,
+      "features_and_family_metadata_identical": true,
+      "full_reference_family_count": 602,
+      "passed": true,
+      "process_rows": 8376,
+      "split_family_count": 838
+    },
+    "verified_benign": {
+      "create_rows": 66554,
+      "create_topology_and_counts_identical": true,
+      "feature_count": 70,
+      "features_and_family_metadata_identical": true,
+      "full_reference_family_count": 4815,
+      "passed": true,
+      "process_rows": 71369,
+      "split_family_count": 4815
+    }
+  },
+  "date": "2026-10-02 (America/Los_Angeles)",
+  "eda10_modified": false,
+  "execution_environment": "Local execution of authentic downloaded Google Drive artifacts; not a Colab runtime",
+  "high_degree_filtering_applied": false,
+  "hybrid_graphs": {
+    "evaluation": {
+      "behavior_relation_edge_counts": {
+        "PROCESS_DESTINATION_MESSAGE": 351,
+        "PROCESS_DESTINATION_START": 545,
+        "PROCESS_FILE_CREATE": 3818,
+        "PROCESS_FILE_DELETE": 2953,
+        "PROCESS_FILE_MODIFY": 7202,
+        "PROCESS_FILE_READ": 61860,
+        "PROCESS_FILE_RENAME": 909,
+        "PROCESS_FILE_WRITE": 5295,
+        "PROCESS_MODULE_LOAD": 221685
+      },
+      "bidirectional_edge_count": 624312,
+      "bidirectional_relation_count": 20,
+      "configuration": {
+        "behavior": "/private/tmp/optc_hybrid_adapter.6Mpe49/work/adapted_behavior/evaluation_behavior_links_v1.parquet",
+        "behavior_action_column": "action_raw",
+        "behavior_count_column": "attach_event_count",
+        "behavior_key_column": "behavior_key",
+        "behavior_process_column": "process_id",
+        "behavior_type_column": "behavior_type",
+        "context_key_policy": "exact_behavior_key_v1",
+        "create_child_column": "child_process_id",
+        "create_count_column": "create_event_count",
+        "create_edges": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_period_features_v1/evaluation_process_create_edges_v1.parquet",
+        "create_parent_column": "parent_process_id",
+        "feature_list_key": "process_features",
+        "feature_schema": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_rgcn_graph_v1/rgcn_model_feature_policy_v1.json",
+        "host_column": null,
+        "host_scope": "",
+        "output_dir": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1",
+        "period_column": "period_role",
+        "period_role": "evaluation",
+        "process_id_column": "process_id",
+        "process_nodes": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_period_features_v1/evaluation_process_features_raw_v1.parquet",
+        "structure_id_column": "split_structure_id",
+        "top_k": 10
+      },
+      "context_identity_policy": {
+        "DESTINATION": "Literal legacy behavior_key; no reinterpretation or host/family scope",
+        "FILE_MODULE": "Literal legacy behavior_key; no normalization or host/family scope",
+        "ambiguous_ipv6": "A valid unbracketed IPv6 endpoint is treated as address-only; explicit [IPv6]:port required for unambiguous port identity",
+        "key_policy": "exact_behavior_key_v1",
+        "period_namespace": "Node and edge IDs include period_role"
+      },
+      "context_predictive_features": [],
+      "create_edge_count": 7538,
+      "create_families_connected_through_shared_context_count": 715,
+      "create_families_per_shared_context": {
+        "frequency": {
+          "2": 3848,
+          "3": 635,
+          "4": 305,
+          "5": 181,
+          "6": 77,
+          "7": 44,
+          "8": 21,
+          "9": 12,
+          "10": 6,
+          "11": 9,
+          "12": 6,
+          "13": 5,
+          "14": 6,
+          "15": 1,
+          "16": 3,
+          "17": 3,
+          "18": 3,
+          "19": 1,
+          "20": 1,
+          "21": 9,
+          "24": 1,
+          "25": 1,
+          "26": 1,
+          "41": 1,
+          "42": 1,
+          "44": 1,
+          "45": 1,
+          "57": 5,
+          "58": 7,
+          "59": 3,
+          "60": 9,
+          "61": 4,
+          "62": 2,
+          "65": 1,
+          "67": 1,
+          "68": 1,
+          "69": 5,
+          "70": 3,
+          "71": 2,
+          "72": 8,
+          "73": 3,
+          "74": 4,
+          "75": 3,
+          "76": 5,
+          "78": 1,
+          "79": 1,
+          "81": 1,
+          "86": 1,
+          "100": 1,
+          "113": 1,
+          "114": 4,
+          "128": 1,
+          "132": 1,
+          "133": 6,
+          "134": 3,
+          "136": 2,
+          "141": 2,
+          "146": 1,
+          "171": 3,
+          "172": 3,
+          "197": 1,
+          "204": 1,
+          "205": 1,
+          "206": 1,
+          "207": 1,
+          "209": 1,
+          "210": 1,
+          "211": 2,
+          "212": 2,
+          "213": 1,
+          "257": 1,
+          "258": 1,
+          "259": 1,
+          "277": 1,
+          "278": 1,
+          "324": 1,
+          "325": 1,
+          "326": 3,
+          "327": 1,
+          "331": 2,
+          "332": 2,
+          "333": 1,
+          "343": 3,
+          "344": 4,
+          "345": 5,
+          "346": 1,
+          "656": 1,
+          "663": 1,
+          "666": 1
+        },
+        "maximum": 666,
+        "median": 2,
+        "p95": 7
+      },
+      "create_family_count": 838,
+      "degree_definition": "Unique incident PROCESS neighbors; no reverse-edge or event-count inflation",
+      "destination_node_count": 357,
+      "family_connection_definition": "Distinct CREATE families in non-singleton family/context incidence components",
+      "file_node_count": 13249,
+      "forward_edge_count": 312156,
+      "forward_relation_count": 10,
+      "high_degree_filtering_applied": false,
+      "input_period_columns_checked": {
+        "behavior": true,
+        "create_edges": true,
+        "process_nodes": true
+      },
+      "input_sha256": {
+        "behavior": "cba430d1f0564d8fca1a1ef947038287cdaa1618287d6a39d3235d48b3bd378a",
+        "create_edges": "a5dce5b82723c57c435a8199ce7e8d5c94c905b386a0e4b5eae51fc8ed725a45",
+        "feature_schema": "3e9be5db049258dea06702775da741a3aa3d40a9f14464cc0be0c6bb7932f0c7",
+        "process_nodes": "53eb9c131c33a67293a4fd0ae9495f5b40b22efe3d6d67bbea0f41f2ec3b51e7"
+      },
+      "largest_component_node_count": 23271,
+      "largest_component_process_count": 8253,
+      "maximum_context_node_degree": 7273,
+      "median_context_node_degree": 2,
+      "merged_create_family_group_count": 1,
+      "merged_create_family_group_sizes": [
+        715
+      ],
+      "module_node_count": 1413,
+      "observed_bidirectional_relation_count": 20,
+      "observed_forward_relation_count": 10,
+      "output_sha256": {
+        "hetero_entity_nodes.parquet": "4b63d28f80143a0833c6eab61ed63bf80f9362a071a7f52db60a484200385a8e",
+        "hetero_graph_edges_bidirectional.parquet": "7f96e65ed2e16f908e8837764bbabe51850334b6f15f48e647f3d6566d71cf4c",
+        "hetero_graph_edges_forward.parquet": "2845183ada28f3ca5e493ec0ff7ea0ea958a1e6f148027007a91c12126f2c8d9",
+        "hetero_process_nodes.parquet": "1f1640499bb8077cbc4d4f218a16099a624c8feb9efab597b95a5c41cf4e93fd",
+        "relation_type_mapping.csv": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff"
+      },
+      "p95_context_node_degree": 30,
+      "percentage_process_nodes_in_largest_component": 98.53151862464183,
+      "period_isolation_contract": "Caller supplies already period-specific inputs; present role columns are validated; all node/edge IDs include period_role",
+      "period_role": "evaluation",
+      "predictive_process_feature_columns": [
+        "log_event_count",
+        "process_lifetime_sec",
+        "log_process_lifetime_sec",
+        "image_path_depth",
+        "parent_path_depth",
+        "parent_count",
+        "child_count",
+        "incoming_create_event_count",
+        "outgoing_create_event_count",
+        "is_root",
+        "is_leaf",
+        "has_children",
+        "depth_from_root",
+        "behavior_event_count_total",
+        "distinct_behavior_rows",
+        "distinct_behavior_keys_total",
+        "behavior_events_per_second",
+        "log_behavior_event_count",
+        "log_distinct_behavior_keys",
+        "log_child_count",
+        "image_path_missing",
+        "image_path_other",
+        "image_path_other_executable",
+        "image_path_program_files",
+        "image_path_user_directory",
+        "image_path_windows_other",
+        "image_path_windows_system32",
+        "parent_path_missing",
+        "parent_path_other",
+        "parent_path_other_executable",
+        "parent_path_program_files",
+        "parent_path_windows_other",
+        "parent_path_windows_system32",
+        "behavior_events__DESTINATION",
+        "behavior_events__FILE",
+        "behavior_events__MODULE",
+        "distinct_keys__DESTINATION",
+        "distinct_keys__FILE",
+        "distinct_keys__MODULE",
+        "event__DESTINATION__MESSAGE",
+        "event__DESTINATION__START",
+        "event__FILE__CREATE",
+        "event__FILE__DELETE",
+        "event__FILE__MODIFY",
+        "event__FILE__READ",
+        "event__FILE__RENAME",
+        "event__FILE__WRITE",
+        "event__MODULE__LOAD",
+        "extended_behavior_event_count_total",
+        "event__SHELL__COMMAND",
+        "distinct_shell_payload_count",
+        "distinct_shell_context_count",
+        "event__THREAD__CREATE",
+        "event__THREAD__REMOTE_CREATE",
+        "event__THREAD__TERMINATE",
+        "thread_event_count_total",
+        "distinct_thread_target_process_count",
+        "event__REGISTRY__ADD",
+        "event__REGISTRY__EDIT",
+        "event__REGISTRY__REMOVE",
+        "registry_event_count_total",
+        "distinct_registry_key_count",
+        "event__PROCESS__OPEN",
+        "event__PROCESS__TERMINATE",
+        "process_noncreate_event_count_total",
+        "distinct_process_open_target_count",
+        "has_shell_command",
+        "has_remote_thread_create",
+        "has_registry_activity",
+        "has_process_open"
+      ],
+      "process_metadata_columns": [
+        "period_role",
+        "split_structure_id",
+        "process_id",
+        "reference_full_structure_id",
+        "event__DESTINATION__OPEN",
+        "structure_id",
+        "node_type",
+        "node_id"
+      ],
+      "process_node_count": 8376,
+      "reconciliation": {
+        "behavior_weight_source": "attach_event_count",
+        "create_topology_unchanged": true,
+        "create_weight_source": "create_event_count",
+        "cross_family_create_edges": 0,
+        "edge_hash_collisions": 0,
+        "input_behavior_event_count": 3902103,
+        "input_behavior_rows": 304618,
+        "input_create_event_count": 7538,
+        "input_create_rows": 7538,
+        "input_create_topology_sha256": "9c5d95046ec28a66f491f97d42c39539bb90c4ca250b4eef0bf684aac2873a1c",
+        "input_process_rows": 8376,
+        "missing_edge_endpoints": 0,
+        "node_hash_collisions": 0,
+        "output_behavior_edges": 304618,
+        "output_behavior_event_count": 3902103,
+        "output_create_event_count": 7538,
+        "output_create_rows": 7538,
+        "output_create_topology_sha256": "9c5d95046ec28a66f491f97d42c39539bb90c4ca250b4eef0bf684aac2873a1c"
+      },
+      "schema_version": "period_heterogeneous_graph_v1",
+      "shared_context_entity_count": 5325,
+      "singleton_process_count": 122,
+      "top_high_degree_context_nodes": {
+        "DESTINATION": [
+          {
+            "canonical_key": "10.20.0.2",
+            "create_family_count": 2,
+            "degree": 52,
+            "host_scope": "",
+            "node_id": "ctx_a47a52f1b0af7ae02cda76bbd7d7ab91ab2c844776974254da82fa887ad8eb3e",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "10.20.4.133",
+            "create_family_count": 4,
+            "degree": 52,
+            "host_scope": "",
+            "node_id": "ctx_f72cab91c0d206538cac3a6a7817514608baf5a841e70f197b19d307c52ef05c",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "127.0.0.1",
+            "create_family_count": 6,
+            "degree": 42,
+            "host_scope": "",
+            "node_id": "ctx_9896dc56b9b73eb15cfe70eeb2b51d5028e00ba6b6dc40ac9c02641d5d1fef9b",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "142.20.56.202",
+            "create_family_count": 9,
+            "degree": 37,
+            "host_scope": "",
+            "node_id": "ctx_6ade625b8ec4d01a6e8f68f6eef6e85be26408d8ba660c6dba3d03c8563847ed",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "::1",
+            "create_family_count": 2,
+            "degree": 22,
+            "host_scope": "",
+            "node_id": "ctx_b86355da9ad87155394977dc10bacfb6da71a7ff503bd9a063fb53ab816a0f75",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "142.20.61.131",
+            "create_family_count": 3,
+            "degree": 14,
+            "host_scope": "",
+            "node_id": "ctx_6396e19c6cd99fbffbc152d56438483f57fd27a5cf8c795651b72272010e68ea",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "142.20.61.130",
+            "create_family_count": 6,
+            "degree": 11,
+            "host_scope": "",
+            "node_id": "ctx_43c52d95277a0d6d9fb709f60cab0338c250c0939b891202b0566a1c1a992a48",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "98.61.14.5",
+            "create_family_count": 2,
+            "degree": 9,
+            "host_scope": "",
+            "node_id": "ctx_5238e3f0f09520ed32488585947ebf49408ccdb6741f4a5eea0d201751a616a2",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "5.221.97.162",
+            "create_family_count": 2,
+            "degree": 6,
+            "host_scope": "",
+            "node_id": "ctx_7c865932c004363c319f2687f0647b17f4df509cd21a2ed53a771625178b921e",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "10.20.2.66",
+            "create_family_count": 3,
+            "degree": 6,
+            "host_scope": "",
+            "node_id": "ctx_fef355fc0b73872b2d87c084507a80bdf381ff4b7bdc985a210151ec3d50e084",
+            "node_type": "DESTINATION",
+            "period_role": "evaluation"
+          }
+        ],
+        "FILE": [
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\system32\\applocker\\script.applocker",
+            "create_family_count": 61,
+            "degree": 1474,
+            "host_scope": "",
+            "node_id": "ctx_77a2a04ca77e701475505dd1cdd62335c92bc948ac2ab321d93c0569906e5127",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\ncr\\deletearchivesecurity.bat",
+            "create_family_count": 61,
+            "degree": 1417,
+            "host_scope": "",
+            "node_id": "ctx_c18d128e2fcc4db3dc4718f48399add73c36be61443c3fb261fa6632a5183308",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\iphlpapi.dll",
+            "create_family_count": 136,
+            "degree": 867,
+            "host_scope": "",
+            "node_id": "ctx_24b7b524e6fd92d57c3ff2a10f8d4fb0baadf390aa29c5c9a1b797172bbfd4da",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\mswsock.dll",
+            "create_family_count": 136,
+            "degree": 864,
+            "host_scope": "",
+            "node_id": "ctx_98f285ae5ad85ef82716b0e7fc37700e3337161b81f8765f277f50c23bd8817a",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wshqos.dll",
+            "create_family_count": 134,
+            "degree": 759,
+            "host_scope": "",
+            "node_id": "ctx_205a5ce2b2016d272d865816da97f0e4fd73e1741eb0acf6e9beff999e6b0d3b",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wship6.dll",
+            "create_family_count": 134,
+            "degree": 759,
+            "host_scope": "",
+            "node_id": "ctx_d8874f7093e799c2f98cf9b3b0bbeff5241c62bf757a22359bce00df28da6414",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wshtcpip.dll",
+            "create_family_count": 134,
+            "degree": 759,
+            "host_scope": "",
+            "node_id": "ctx_dd9ef2c00b018cdd4a921f477245bcfedecdbff47ccb15d91ba8770203a02513",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\winnsi.dll",
+            "create_family_count": 24,
+            "degree": 629,
+            "host_scope": "",
+            "node_id": "ctx_a9ea718a702d7a09e273e50650cc5d9d427a51f94402a181935b81e4fdfec35b",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\system32\\iphlpapi.dll",
+            "create_family_count": 76,
+            "degree": 600,
+            "host_scope": "",
+            "node_id": "ctx_8d03bf7c3b22f2653106f4a2614b0ca7bfcedf58c78e648a9076019487cdf56b",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\system32\\bcrypt.dll",
+            "create_family_count": 73,
+            "degree": 428,
+            "host_scope": "",
+            "node_id": "ctx_3865bfdae35981f3a3ae34e6681df3a72733da7bf0ff2999c81b6b8cdb8eccb2",
+            "node_type": "FILE",
+            "period_role": "evaluation"
+          }
+        ],
+        "MODULE": [
+          {
+            "canonical_key": "\\windows\\system32\\kernel32.dll",
+            "create_family_count": 663,
+            "degree": 7273,
+            "host_scope": "",
+            "node_id": "ctx_34b734d9d5d3466de5222bf4d43eef42c7b0a493df18858f5db1fe51c1763f5d",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\systemroot\\system32\\ntdll.dll",
+            "create_family_count": 666,
+            "degree": 7255,
+            "host_scope": "",
+            "node_id": "ctx_9e17e3d82d2e9ba5843607ca32676994f8ce1f8c0cb540abc2d9a40db2b53a8e",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\windows\\system32\\user32.dll",
+            "create_family_count": 656,
+            "degree": 6885,
+            "host_scope": "",
+            "node_id": "ctx_056a3f3424f8a2e328a243ea76eeb48d9890086442d1dc47a8ece3a812bc00a8",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\windows\\system32\\rpcrt4.dll",
+            "create_family_count": 333,
+            "degree": 4396,
+            "host_scope": "",
+            "node_id": "ctx_45b167e4f3e9c6285f6bdae12c1e0b15b44e092ade855abe6825f6841376aa41",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\windows\\system32\\kernelbase.dll",
+            "create_family_count": 331,
+            "degree": 4393,
+            "host_scope": "",
+            "node_id": "ctx_450e93fc55ecea259fd9db0d85104c706c5cc6dc9b6433ca49d049bed8c47f46",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\windows\\system32\\sechost.dll",
+            "create_family_count": 332,
+            "degree": 4392,
+            "host_scope": "",
+            "node_id": "ctx_39b66397711923c2994cbd1c8c153b9dcd848d6568e45c89d1c92d873d870d52",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\windows\\system32\\msvcrt.dll",
+            "create_family_count": 332,
+            "degree": 4391,
+            "host_scope": "",
+            "node_id": "ctx_53a0be084bc13c17eba2564501af69f6ec1fa4a1f66ac07dcdb7de7780879127",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\windows\\system32\\advapi32.dll",
+            "create_family_count": 331,
+            "degree": 4390,
+            "host_scope": "",
+            "node_id": "ctx_bfd3959653dc203e391492f8dc492a9c8209838254c612c26d804815a60baed2",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\windows\\system32\\ucrtbase.dll",
+            "create_family_count": 326,
+            "degree": 4017,
+            "host_scope": "",
+            "node_id": "ctx_6b316e0130b757c4bcb8e6914c53a1da010b338c349c894e017034b0fe79f2b4",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          },
+          {
+            "canonical_key": "\\windows\\system32\\msvcp_win.dll",
+            "create_family_count": 326,
+            "degree": 4013,
+            "host_scope": "",
+            "node_id": "ctx_1c3170f4cf6d1a3beb203fb5d056ebe0b548a6728cddb68293707ac438d72481",
+            "node_type": "MODULE",
+            "period_role": "evaluation"
+          }
+        ]
+      },
+      "total_entity_node_count": 15019,
+      "total_graph_node_count": 23395,
+      "weakly_connected_component_count": 124
+    },
+    "verified_benign": {
+      "behavior_relation_edge_counts": {
+        "PROCESS_DESTINATION_MESSAGE": 3354,
+        "PROCESS_DESTINATION_START": 2958,
+        "PROCESS_FILE_CREATE": 37677,
+        "PROCESS_FILE_DELETE": 27800,
+        "PROCESS_FILE_MODIFY": 60544,
+        "PROCESS_FILE_READ": 582536,
+        "PROCESS_FILE_RENAME": 7994,
+        "PROCESS_FILE_WRITE": 49467,
+        "PROCESS_MODULE_LOAD": 1907487
+      },
+      "bidirectional_edge_count": 5492742,
+      "bidirectional_relation_count": 20,
+      "configuration": {
+        "behavior": "/private/tmp/optc_hybrid_adapter.6Mpe49/work/adapted_behavior/verified_benign_behavior_links_v1.parquet",
+        "behavior_action_column": "action_raw",
+        "behavior_count_column": "attach_event_count",
+        "behavior_key_column": "behavior_key",
+        "behavior_process_column": "process_id",
+        "behavior_type_column": "behavior_type",
+        "context_key_policy": "exact_behavior_key_v1",
+        "create_child_column": "child_process_id",
+        "create_count_column": "create_event_count",
+        "create_edges": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_period_features_v1/train_process_create_edges_v1.parquet",
+        "create_parent_column": "parent_process_id",
+        "feature_list_key": "process_features",
+        "feature_schema": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_rgcn_graph_v1/rgcn_model_feature_policy_v1.json",
+        "host_column": null,
+        "host_scope": "",
+        "output_dir": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1",
+        "period_column": "period_role",
+        "period_role": "verified_benign",
+        "process_id_column": "process_id",
+        "process_nodes": "/private/tmp/optc_hybrid_adapter.6Mpe49/artifacts/eda_10_sysclient0201_period_features_v1/train_process_features_raw_v1.parquet",
+        "structure_id_column": "split_structure_id",
+        "top_k": 10
+      },
+      "context_identity_policy": {
+        "DESTINATION": "Literal legacy behavior_key; no reinterpretation or host/family scope",
+        "FILE_MODULE": "Literal legacy behavior_key; no normalization or host/family scope",
+        "ambiguous_ipv6": "A valid unbracketed IPv6 endpoint is treated as address-only; explicit [IPv6]:port required for unambiguous port identity",
+        "key_policy": "exact_behavior_key_v1",
+        "period_namespace": "Node and edge IDs include period_role"
+      },
+      "context_predictive_features": [],
+      "create_edge_count": 66554,
+      "create_families_connected_through_shared_context_count": 4808,
+      "create_families_per_shared_context": {
+        "frequency": {
+          "2": 28006,
+          "3": 3091,
+          "4": 1153,
+          "5": 659,
+          "6": 838,
+          "7": 383,
+          "8": 223,
+          "9": 172,
+          "10": 90,
+          "11": 64,
+          "12": 49,
+          "13": 54,
+          "14": 41,
+          "15": 36,
+          "16": 23,
+          "17": 28,
+          "18": 18,
+          "19": 26,
+          "20": 14,
+          "21": 20,
+          "22": 18,
+          "23": 7,
+          "24": 9,
+          "25": 13,
+          "26": 5,
+          "27": 16,
+          "28": 6,
+          "29": 15,
+          "30": 6,
+          "31": 3,
+          "32": 8,
+          "33": 2,
+          "34": 5,
+          "35": 5,
+          "36": 4,
+          "37": 4,
+          "38": 4,
+          "39": 2,
+          "40": 6,
+          "41": 2,
+          "42": 1,
+          "44": 1,
+          "45": 1,
+          "46": 1,
+          "48": 1,
+          "49": 1,
+          "50": 1,
+          "51": 1,
+          "52": 1,
+          "53": 1,
+          "57": 1,
+          "59": 1,
+          "60": 1,
+          "61": 3,
+          "62": 1,
+          "63": 1,
+          "64": 1,
+          "65": 2,
+          "67": 1,
+          "68": 1,
+          "69": 2,
+          "70": 2,
+          "71": 1,
+          "72": 1,
+          "74": 1,
+          "79": 1,
+          "80": 1,
+          "83": 7,
+          "84": 2,
+          "85": 2,
+          "89": 1,
+          "99": 1,
+          "105": 1,
+          "109": 1,
+          "124": 1,
+          "127": 1,
+          "143": 1,
+          "316": 1,
+          "317": 1,
+          "324": 1,
+          "564": 1,
+          "565": 1,
+          "601": 1,
+          "603": 1,
+          "629": 1,
+          "630": 1,
+          "631": 1,
+          "632": 1,
+          "635": 1,
+          "636": 1,
+          "637": 5,
+          "638": 1,
+          "639": 1,
+          "643": 1,
+          "647": 1,
+          "651": 1,
+          "653": 2,
+          "654": 1,
+          "655": 1,
+          "657": 1,
+          "665": 1,
+          "669": 1,
+          "670": 1,
+          "679": 1,
+          "683": 1,
+          "685": 1,
+          "687": 1,
+          "688": 1,
+          "689": 1,
+          "690": 1,
+          "692": 1,
+          "698": 1,
+          "707": 1,
+          "709": 1,
+          "711": 1,
+          "720": 1,
+          "721": 2,
+          "758": 1,
+          "914": 1,
+          "923": 1,
+          "926": 1,
+          "930": 1,
+          "933": 2,
+          "940": 1,
+          "941": 1,
+          "942": 1,
+          "944": 2,
+          "946": 1,
+          "948": 1,
+          "949": 1,
+          "950": 1,
+          "951": 1,
+          "952": 2,
+          "953": 1,
+          "956": 2,
+          "957": 1,
+          "958": 2,
+          "962": 1,
+          "964": 1,
+          "968": 2,
+          "969": 1,
+          "973": 1,
+          "976": 2,
+          "979": 1,
+          "988": 1,
+          "992": 1,
+          "1010": 1,
+          "1030": 2,
+          "1032": 1,
+          "1315": 1,
+          "1322": 1,
+          "1324": 1,
+          "1328": 1,
+          "1329": 1,
+          "1346": 2,
+          "1347": 2,
+          "1348": 2,
+          "1392": 2,
+          "1393": 1,
+          "1394": 1,
+          "1395": 2,
+          "1399": 1,
+          "1410": 1,
+          "1425": 1,
+          "1427": 1,
+          "1446": 1,
+          "1620": 1,
+          "1660": 1,
+          "1684": 1,
+          "1685": 1,
+          "1686": 1,
+          "1687": 1,
+          "1689": 1,
+          "1690": 1,
+          "1691": 1,
+          "1692": 1,
+          "1693": 1,
+          "1695": 2,
+          "2063": 1,
+          "3013": 1,
+          "3021": 1,
+          "3022": 1,
+          "3038": 1,
+          "3039": 1,
+          "3042": 1,
+          "3044": 1,
+          "3045": 2,
+          "3047": 1,
+          "3048": 3,
+          "4628": 1,
+          "4659": 1,
+          "4660": 1
+        },
+        "maximum": 4660,
+        "median": 2,
+        "p95": 6
+      },
+      "create_family_count": 4815,
+      "degree_definition": "Unique incident PROCESS neighbors; no reverse-edge or event-count inflation",
+      "destination_node_count": 142,
+      "family_connection_definition": "Distinct CREATE families in non-singleton family/context incidence components",
+      "file_node_count": 55758,
+      "forward_edge_count": 2746371,
+      "forward_relation_count": 10,
+      "high_degree_filtering_applied": false,
+      "input_period_columns_checked": {
+        "behavior": true,
+        "create_edges": true,
+        "process_nodes": true
+      },
+      "input_sha256": {
+        "behavior": "71a5d5015ef8575237d2121fe5484fbdbd37e0af57a90b6d96d034b295802d97",
+        "create_edges": "96346731ade3a3a7c37e594b71ca14246bb953c1e327abb51256fb63627436f8",
+        "feature_schema": "3e9be5db049258dea06702775da741a3aa3d40a9f14464cc0be0c6bb7932f0c7",
+        "process_nodes": "3f0c90b55256cd3f98b59ca536e4545b2992cf35eaf9f89b7fd1c2c9b877f3ad"
+      },
+      "largest_component_node_count": 130106,
+      "largest_component_process_count": 71362,
+      "maximum_context_node_degree": 63784,
+      "median_context_node_degree": 2,
+      "merged_create_family_group_count": 1,
+      "merged_create_family_group_sizes": [
+        4808
+      ],
+      "module_node_count": 2844,
+      "observed_bidirectional_relation_count": 20,
+      "observed_forward_relation_count": 10,
+      "output_sha256": {
+        "hetero_entity_nodes.parquet": "365f0732c43af88e02043b3a48691372e16606a7816c9a49ddfcb175124ef0b6",
+        "hetero_graph_edges_bidirectional.parquet": "49473185ab0402ac32a3878b31f0fd780ff48bfcd7f64f78f440d6cdc2e74a2d",
+        "hetero_graph_edges_forward.parquet": "8c59d3bac2511d78abd7052455eecafccbe434ea922f2cb853effb604c7e9d88",
+        "hetero_process_nodes.parquet": "5cefa50dd17cf359142ec83f672e725c036a76af85b9c2afe70bfa55b685c697",
+        "relation_type_mapping.csv": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff"
+      },
+      "p95_context_node_degree": 37,
+      "percentage_process_nodes_in_largest_component": 99.99019181997787,
+      "period_isolation_contract": "Caller supplies already period-specific inputs; present role columns are validated; all node/edge IDs include period_role",
+      "period_role": "verified_benign",
+      "predictive_process_feature_columns": [
+        "log_event_count",
+        "process_lifetime_sec",
+        "log_process_lifetime_sec",
+        "image_path_depth",
+        "parent_path_depth",
+        "parent_count",
+        "child_count",
+        "incoming_create_event_count",
+        "outgoing_create_event_count",
+        "is_root",
+        "is_leaf",
+        "has_children",
+        "depth_from_root",
+        "behavior_event_count_total",
+        "distinct_behavior_rows",
+        "distinct_behavior_keys_total",
+        "behavior_events_per_second",
+        "log_behavior_event_count",
+        "log_distinct_behavior_keys",
+        "log_child_count",
+        "image_path_missing",
+        "image_path_other",
+        "image_path_other_executable",
+        "image_path_program_files",
+        "image_path_user_directory",
+        "image_path_windows_other",
+        "image_path_windows_system32",
+        "parent_path_missing",
+        "parent_path_other",
+        "parent_path_other_executable",
+        "parent_path_program_files",
+        "parent_path_windows_other",
+        "parent_path_windows_system32",
+        "behavior_events__DESTINATION",
+        "behavior_events__FILE",
+        "behavior_events__MODULE",
+        "distinct_keys__DESTINATION",
+        "distinct_keys__FILE",
+        "distinct_keys__MODULE",
+        "event__DESTINATION__MESSAGE",
+        "event__DESTINATION__START",
+        "event__FILE__CREATE",
+        "event__FILE__DELETE",
+        "event__FILE__MODIFY",
+        "event__FILE__READ",
+        "event__FILE__RENAME",
+        "event__FILE__WRITE",
+        "event__MODULE__LOAD",
+        "extended_behavior_event_count_total",
+        "event__SHELL__COMMAND",
+        "distinct_shell_payload_count",
+        "distinct_shell_context_count",
+        "event__THREAD__CREATE",
+        "event__THREAD__REMOTE_CREATE",
+        "event__THREAD__TERMINATE",
+        "thread_event_count_total",
+        "distinct_thread_target_process_count",
+        "event__REGISTRY__ADD",
+        "event__REGISTRY__EDIT",
+        "event__REGISTRY__REMOVE",
+        "registry_event_count_total",
+        "distinct_registry_key_count",
+        "event__PROCESS__OPEN",
+        "event__PROCESS__TERMINATE",
+        "process_noncreate_event_count_total",
+        "distinct_process_open_target_count",
+        "has_shell_command",
+        "has_remote_thread_create",
+        "has_registry_activity",
+        "has_process_open"
+      ],
+      "process_metadata_columns": [
+        "period_role",
+        "split_structure_id",
+        "process_id",
+        "reference_full_structure_id",
+        "event__DESTINATION__OPEN",
+        "structure_id",
+        "node_type",
+        "node_id"
+      ],
+      "process_node_count": 71369,
+      "reconciliation": {
+        "behavior_weight_source": "attach_event_count",
+        "create_topology_unchanged": true,
+        "create_weight_source": "create_event_count",
+        "cross_family_create_edges": 0,
+        "edge_hash_collisions": 0,
+        "input_behavior_event_count": 24418759,
+        "input_behavior_rows": 2679817,
+        "input_create_event_count": 66554,
+        "input_create_rows": 66554,
+        "input_create_topology_sha256": "92ebab857a3e00e07f2662acc45f3d5644c242e87c6631e80587b67202fafc9c",
+        "input_process_rows": 71369,
+        "missing_edge_endpoints": 0,
+        "node_hash_collisions": 0,
+        "output_behavior_edges": 2679817,
+        "output_behavior_event_count": 24418759,
+        "output_create_event_count": 66554,
+        "output_create_rows": 66554,
+        "output_create_topology_sha256": "92ebab857a3e00e07f2662acc45f3d5644c242e87c6631e80587b67202fafc9c"
+      },
+      "schema_version": "period_heterogeneous_graph_v1",
+      "shared_context_entity_count": 35316,
+      "singleton_process_count": 7,
+      "top_high_degree_context_nodes": {
+        "DESTINATION": [
+          {
+            "canonical_key": "142.20.56.202",
+            "create_family_count": 19,
+            "degree": 475,
+            "host_scope": "",
+            "node_id": "ctx_49c3c432391084ba74e84e4c2caa05c2568852f563d6e892662b588028f4b6ee",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "127.0.0.1",
+            "create_family_count": 8,
+            "degree": 407,
+            "host_scope": "",
+            "node_id": "ctx_ed990be144d981a4bc5c90cbf332b0c03937c85e4cc165810d741fc81c7b9105",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "10.20.0.2",
+            "create_family_count": 5,
+            "degree": 284,
+            "host_scope": "",
+            "node_id": "ctx_6e7e7c26ddd1aa2cd78e9228d60865a60d33a1052b92801a42084bae386077b1",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "10.20.4.133",
+            "create_family_count": 3,
+            "degree": 277,
+            "host_scope": "",
+            "node_id": "ctx_8f53166c26e51c159c317c8edc0644415ff42ab495268ab82b33b4d217b794e8",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "::1",
+            "create_family_count": 7,
+            "degree": 231,
+            "host_scope": "",
+            "node_id": "ctx_489560c788aa99649e9ed086df28f5371197d8ed017d369a70d8c085b74f0304",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "142.20.61.130",
+            "create_family_count": 23,
+            "degree": 215,
+            "host_scope": "",
+            "node_id": "ctx_d1f1b3ecbfa327fede76f11021af72812c41015ac98e770a7d7402c97a766037",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "142.20.61.131",
+            "create_family_count": 17,
+            "degree": 156,
+            "host_scope": "",
+            "node_id": "ctx_4843c2ca6e691d370eea1ee0fedb1caeca2a62e87ebc65d526bbc7d779ffbc7f",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "98.61.14.5",
+            "create_family_count": 2,
+            "degree": 89,
+            "host_scope": "",
+            "node_id": "ctx_8416d7f64fc35d53274b1d6021c88063b851848ebe63df086c00865d7fce6ccd",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "5.221.97.162",
+            "create_family_count": 2,
+            "degree": 82,
+            "host_scope": "",
+            "node_id": "ctx_4d9daaa659236cefc9ab2a71b60bbe7171bbd768308e49a28c701b0710d6ee9b",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "10.20.2.66",
+            "create_family_count": 5,
+            "degree": 48,
+            "host_scope": "",
+            "node_id": "ctx_0fda03851f1e3074178f937d0b5218fc51d9bdfe4e002083ebf9fa9ade88a803",
+            "node_type": "DESTINATION",
+            "period_role": "verified_benign"
+          }
+        ],
+        "FILE": [
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\iphlpapi.dll",
+            "create_family_count": 1410,
+            "degree": 11458,
+            "host_scope": "",
+            "node_id": "ctx_b998e22461af804f682e579021401c81373a4d4841512ccc9d85ac1516184b57",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\mswsock.dll",
+            "create_family_count": 1399,
+            "degree": 11364,
+            "host_scope": "",
+            "node_id": "ctx_8a4eaa1d7617f90a0f2e7257e30735c56256ea4017719382845c712d211545ef",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wshqos.dll",
+            "create_family_count": 1394,
+            "degree": 10389,
+            "host_scope": "",
+            "node_id": "ctx_e31b2c929d18dd703f4f4d140ac98ea1414a6a08fabb18545e1272502acc9eaa",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wshtcpip.dll",
+            "create_family_count": 1392,
+            "degree": 10373,
+            "host_scope": "",
+            "node_id": "ctx_7eba8a15c385129237a1d773f51e8675b156447c1a01675251b4a80c1cadf5b7",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wship6.dll",
+            "create_family_count": 1392,
+            "degree": 10367,
+            "host_scope": "",
+            "node_id": "ctx_a3e5052611a501c7acf3b4657898308d61b67f7b0e51298c98e40ac94dfffdda",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\winnsi.dll",
+            "create_family_count": 84,
+            "degree": 7296,
+            "host_scope": "",
+            "node_id": "ctx_251f13ec27ac20ac190eaf120ddf5ab50c52aea785554796f3d1bddef199e1e2",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\system32\\applocker\\script.applocker",
+            "create_family_count": 40,
+            "degree": 6136,
+            "host_scope": "",
+            "node_id": "ctx_bed320c7b98304aa39fe752c21e4af9e0506c5bad8a6e8ccf78cdce0561800b9",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\bcrypt.dll",
+            "create_family_count": 670,
+            "degree": 5783,
+            "host_scope": "",
+            "node_id": "ctx_7bcdd35ddf8d9a94fcb923fdc602f5b77a5aeaf5ac07eaca9cdb52fa741724e3",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\ncr\\deletearchivesecurity.bat",
+            "create_family_count": 34,
+            "degree": 5762,
+            "host_scope": "",
+            "node_id": "ctx_ff589692044ba716eb1d01314e899c1016f9c623afcd4a31554b650d485387fa",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\device\\harddiskvolume1\\windows\\system32\\bcrypt.dll",
+            "create_family_count": 976,
+            "degree": 5718,
+            "host_scope": "",
+            "node_id": "ctx_e30e3272aade95191b2a31e219bcc70b02a7f2a93f7545b7a6a3afdcd4d7dc81",
+            "node_type": "FILE",
+            "period_role": "verified_benign"
+          }
+        ],
+        "MODULE": [
+          {
+            "canonical_key": "\\windows\\system32\\kernel32.dll",
+            "create_family_count": 4659,
+            "degree": 63784,
+            "host_scope": "",
+            "node_id": "ctx_4860fc9f368c98652d11017433088a9e0cfa6b2d42e0297a5508efe859843c7a",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\systemroot\\system32\\ntdll.dll",
+            "create_family_count": 4628,
+            "degree": 63685,
+            "host_scope": "",
+            "node_id": "ctx_3526f9c7caed615d6ce31cae2cab001be3beed0660b202ffff226b70096ca50d",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\windows\\system32\\user32.dll",
+            "create_family_count": 4660,
+            "degree": 62355,
+            "host_scope": "",
+            "node_id": "ctx_1b3cc4c57ea856311723b43605e5f367d64b7c0922d3adad9d8df00b297ca54c",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\windows\\syswow64\\kernel32.dll",
+            "create_family_count": 3045,
+            "degree": 41032,
+            "host_scope": "",
+            "node_id": "ctx_9251eb000e11888c900566a02ab77af006f9426d1fb62ebf55319ab0d22308b9",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\windows\\syswow64\\bcryptprimitives.dll",
+            "create_family_count": 3048,
+            "degree": 40994,
+            "host_scope": "",
+            "node_id": "ctx_0f356b6000818da08cca5d8f75a88969cadd9114cfadba2235a5cbb6e7689d66",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\windows\\syswow64\\rpcrt4.dll",
+            "create_family_count": 3047,
+            "degree": 40991,
+            "host_scope": "",
+            "node_id": "ctx_68b22c6e4544a43bbc3f63a672e63042942f6e13aea57c64729500077f31af2a",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\windows\\syswow64\\cryptbase.dll",
+            "create_family_count": 3048,
+            "degree": 40991,
+            "host_scope": "",
+            "node_id": "ctx_aa313b50950c47219910ecd6a5a466a20ea15545b05b8c3881f93190c48a9518",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\windows\\syswow64\\sspicli.dll",
+            "create_family_count": 3048,
+            "degree": 40990,
+            "host_scope": "",
+            "node_id": "ctx_f47d51b834f3969c14741ae2792b8453e8f32cf1775434546093a757851f8b2a",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\windows\\syswow64\\msvcrt.dll",
+            "create_family_count": 3044,
+            "degree": 40986,
+            "host_scope": "",
+            "node_id": "ctx_27be0ddb4e907829f95c2dbb3a9da0ee57dc29545818d0a6d6db0ff748ea06a1",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          },
+          {
+            "canonical_key": "\\windows\\syswow64\\sechost.dll",
+            "create_family_count": 3045,
+            "degree": 40986,
+            "host_scope": "",
+            "node_id": "ctx_af92527559511acfbe9b2d26aa35abc9eee85355827e5fb99b9e62d5dcf7514a",
+            "node_type": "MODULE",
+            "period_role": "verified_benign"
+          }
+        ]
+      },
+      "total_entity_node_count": 58744,
+      "total_graph_node_count": 130113,
+      "weakly_connected_component_count": 8
+    }
+  },
+  "interpretation": "Changing only context scope produces near-total PROCESS component collapse; common Windows modules dominate the hubs. Utility/noise and model performance have not been measured.",
+  "models_trained": false,
+  "old_topology_measured_baseline": {
+    "family_metrics_column": "split_structure_id",
+    "input_sha256": {
+      "legacy_behavior_edges": "3017b2dfcc9e713cd97f1c98869d0d3d23a18979eee94204b7a76c1e305ab919",
+      "legacy_create_edges": "a89b746d068f101a96753d8a3dbb8e3d159fef8d81f6162a8a69438b19ee54e0",
+      "legacy_process_nodes": "896193d086d3525f0366dd214423665dcfca99f2838b7d0e219027e8c65fb0b0"
+    },
+    "measurement": "Computed from stored historical PROCESS/behavior/CREATE topology; not inferred from summary",
+    "periods": {
+      "evaluation": {
+        "create_edge_count": 7538,
+        "create_families_connected_through_shared_context_count": 0,
+        "create_families_per_shared_context": {
+          "frequency": {},
+          "maximum": 0,
+          "median": 0,
+          "p95": 0
+        },
+        "degree_definition": "Unique incident PROCESS neighbors; no reverse-edge or event-count inflation",
+        "destination_node_count": 405,
+        "family_connection_definition": "Distinct CREATE families in non-singleton family/context incidence components",
+        "file_node_count": 22796,
+        "forward_edge_count": 312156,
+        "high_degree_filtering_applied": false,
+        "largest_component_node_count": 14152,
+        "largest_component_process_count": 6495,
+        "maximum_context_node_degree": 5662,
+        "median_context_node_degree": 1,
+        "merged_create_family_group_count": 0,
+        "merged_create_family_group_sizes": [],
+        "module_node_count": 22739,
+        "p95_context_node_degree": 7,
+        "percentage_process_nodes_in_largest_component": 77.5429799426934,
+        "process_node_count": 8376,
+        "shared_context_entity_count": 0,
+        "singleton_process_count": 122,
+        "top_high_degree_context_nodes": {
+          "DESTINATION": [
+            {
+              "canonical_key": "10.20.0.2",
+              "create_family_count": 1,
+              "degree": 51,
+              "node_id": "ent_3faf26467a52891d0e37a1c2",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "10.20.4.133",
+              "create_family_count": 1,
+              "degree": 49,
+              "node_id": "ent_1d78ef51966258d18992df92",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "127.0.0.1",
+              "create_family_count": 1,
+              "degree": 37,
+              "node_id": "ent_106fa0b4ccc7d55adcca3a29",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "142.20.56.202",
+              "create_family_count": 1,
+              "degree": 28,
+              "node_id": "ent_48866b69065f1fa3be6ef031",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "::1",
+              "create_family_count": 1,
+              "degree": 21,
+              "node_id": "ent_30ecee02cdbb6e8754c2ae8d",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "142.20.61.131",
+              "create_family_count": 1,
+              "degree": 12,
+              "node_id": "ent_fc041a7c2a757b6f7ce071dd",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "98.61.14.5",
+              "create_family_count": 1,
+              "degree": 8,
+              "node_id": "ent_984ae0ce1d0f2f4c755215c4",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "142.20.61.130",
+              "create_family_count": 1,
+              "degree": 6,
+              "node_id": "ent_3061eb0447574c614e1d8adc",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "5.221.97.162",
+              "create_family_count": 1,
+              "degree": 5,
+              "node_id": "ent_e246ddb0d3e1b0e94d81a656",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "142.20.61.134",
+              "create_family_count": 1,
+              "degree": 4,
+              "node_id": "ent_3d1b8dbc614a82d133c5e586",
+              "node_type": "DESTINATION"
+            }
+          ],
+          "FILE": [
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\system32\\applocker\\script.applocker",
+              "create_family_count": 1,
+              "degree": 1366,
+              "node_id": "ent_08dc174b2aebd86f526dc566",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\ncr\\deletearchivesecurity.bat",
+              "create_family_count": 1,
+              "degree": 1327,
+              "node_id": "ent_442853fd0bfcb6998699d8e4",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\iphlpapi.dll",
+              "create_family_count": 1,
+              "degree": 606,
+              "node_id": "ent_b2113bbc55dbdd7b0bf8d279",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\mswsock.dll",
+              "create_family_count": 1,
+              "degree": 602,
+              "node_id": "ent_3746c09159cf57ccdb1560e9",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wship6.dll",
+              "create_family_count": 1,
+              "degree": 569,
+              "node_id": "ent_3fa9643944d5d6dfbd30d0c2",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wshtcpip.dll",
+              "create_family_count": 1,
+              "degree": 569,
+              "node_id": "ent_ce3392abe16da23b08aafdee",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wshqos.dll",
+              "create_family_count": 1,
+              "degree": 569,
+              "node_id": "ent_d45ab26a8aed92210acf9a83",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\winnsi.dll",
+              "create_family_count": 1,
+              "degree": 481,
+              "node_id": "ent_c93d334e3fa766747d173eba",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\system32\\iphlpapi.dll",
+              "create_family_count": 1,
+              "degree": 463,
+              "node_id": "ent_61a3b2316e65694b81b132f1",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\system32\\mswsock.dll",
+              "create_family_count": 1,
+              "degree": 278,
+              "node_id": "ent_cf36d8c0c7419f7ef846a4a4",
+              "node_type": "FILE"
+            }
+          ],
+          "MODULE": [
+            {
+              "canonical_key": "\\windows\\system32\\kernel32.dll",
+              "create_family_count": 1,
+              "degree": 5662,
+              "node_id": "ent_ef5a91fa0388fd68f9d1105b",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\systemroot\\system32\\ntdll.dll",
+              "create_family_count": 1,
+              "degree": 5633,
+              "node_id": "ent_4db48fb588d7bc14d4c8fbef",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\system32\\user32.dll",
+              "create_family_count": 1,
+              "degree": 5387,
+              "node_id": "ent_607bca8762b9e897ace320b9",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\system32\\sechost.dll",
+              "create_family_count": 1,
+              "degree": 3362,
+              "node_id": "ent_818761dc5e1a54eba0c349c3",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\system32\\rpcrt4.dll",
+              "create_family_count": 1,
+              "degree": 3362,
+              "node_id": "ent_eb1cea883acb0d135cf5167e",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\system32\\advapi32.dll",
+              "create_family_count": 1,
+              "degree": 3360,
+              "node_id": "ent_27f077cc0269e91472869c15",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\system32\\msvcrt.dll",
+              "create_family_count": 1,
+              "degree": 3360,
+              "node_id": "ent_4192847d7ee76c982fb00e0d",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\system32\\kernelbase.dll",
+              "create_family_count": 1,
+              "degree": 3360,
+              "node_id": "ent_5bf4abc4b1b975ebdbee0604",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\system32\\ucrtbase.dll",
+              "create_family_count": 1,
+              "degree": 3088,
+              "node_id": "ent_93cfc99fd096d822fe88d8f7",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\system32\\msvcp_win.dll",
+              "create_family_count": 1,
+              "degree": 3084,
+              "node_id": "ent_2ea9d17ecb9c03926de8ea43",
+              "node_type": "MODULE"
+            }
+          ]
+        },
+        "weakly_connected_component_count": 838
+      },
+      "verified_benign": {
+        "create_edge_count": 66554,
+        "create_families_connected_through_shared_context_count": 0,
+        "create_families_per_shared_context": {
+          "frequency": {},
+          "maximum": 0,
+          "median": 0,
+          "p95": 0
+        },
+        "degree_definition": "Unique incident PROCESS neighbors; no reverse-edge or event-count inflation",
+        "destination_node_count": 422,
+        "family_connection_definition": "Distinct CREATE families in non-singleton family/context incidence components",
+        "file_node_count": 138623,
+        "forward_edge_count": 2746371,
+        "high_degree_filtering_applied": false,
+        "largest_component_node_count": 81259,
+        "largest_component_process_count": 41277,
+        "maximum_context_node_degree": 37139,
+        "median_context_node_degree": 1,
+        "merged_create_family_group_count": 0,
+        "merged_create_family_group_sizes": [],
+        "module_node_count": 157713,
+        "p95_context_node_degree": 4,
+        "percentage_process_nodes_in_largest_component": 57.836035253401334,
+        "process_node_count": 71369,
+        "shared_context_entity_count": 0,
+        "singleton_process_count": 7,
+        "top_high_degree_context_nodes": {
+          "DESTINATION": [
+            {
+              "canonical_key": "142.20.56.202",
+              "create_family_count": 1,
+              "degree": 304,
+              "node_id": "ent_3b71e747c52a9513ecc67db9",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "127.0.0.1",
+              "create_family_count": 1,
+              "degree": 265,
+              "node_id": "ent_b1a1cbce148e520729fa2008",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "10.20.4.133",
+              "create_family_count": 1,
+              "degree": 168,
+              "node_id": "ent_25ad6a173f71b04b637fb93c",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "10.20.0.2",
+              "create_family_count": 1,
+              "degree": 165,
+              "node_id": "ent_5f8652fb7ac03645eff1d3b3",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "::1",
+              "create_family_count": 1,
+              "degree": 146,
+              "node_id": "ent_0d2ea866c765239f442d4958",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "142.20.56.202",
+              "create_family_count": 1,
+              "degree": 141,
+              "node_id": "ent_4346acca66abee7b4b0c3357",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "127.0.0.1",
+              "create_family_count": 1,
+              "degree": 135,
+              "node_id": "ent_82df5b80263668ce53dd26d5",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "142.20.61.130",
+              "create_family_count": 1,
+              "degree": 119,
+              "node_id": "ent_2ca7dd5f6896229cd5f87aee",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "10.20.0.2",
+              "create_family_count": 1,
+              "degree": 116,
+              "node_id": "ent_c378d0cb19880ded669b5647",
+              "node_type": "DESTINATION"
+            },
+            {
+              "canonical_key": "10.20.4.133",
+              "create_family_count": 1,
+              "degree": 108,
+              "node_id": "ent_23b86b8c2cf8100db7b53675",
+              "node_type": "DESTINATION"
+            }
+          ],
+          "FILE": [
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\iphlpapi.dll",
+              "create_family_count": 1,
+              "degree": 7112,
+              "node_id": "ent_48ebbd214844f094da43f552",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\mswsock.dll",
+              "create_family_count": 1,
+              "degree": 7037,
+              "node_id": "ent_c7fa2931caaccf3cf306cfe3",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wshqos.dll",
+              "create_family_count": 1,
+              "degree": 6444,
+              "node_id": "ent_e2d352bb5f270caaae221d94",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wshtcpip.dll",
+              "create_family_count": 1,
+              "degree": 6432,
+              "node_id": "ent_a60cb8981261101d6df8542e",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\wship6.dll",
+              "create_family_count": 1,
+              "degree": 6428,
+              "node_id": "ent_c6190add6103b2cc089ac8ba",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\winnsi.dll",
+              "create_family_count": 1,
+              "degree": 4968,
+              "node_id": "ent_818270669c58d87a480aaec1",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\bcrypt.dll",
+              "create_family_count": 1,
+              "degree": 3697,
+              "node_id": "ent_350b4ed6e6556570faf3c9b8",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\version.dll",
+              "create_family_count": 1,
+              "degree": 3627,
+              "node_id": "ent_c062abf0cc0df01356074731",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\winsta.dll",
+              "create_family_count": 1,
+              "degree": 3398,
+              "node_id": "ent_de49a236ea4c4ac3e7b1dc1d",
+              "node_type": "FILE"
+            },
+            {
+              "canonical_key": "\\device\\harddiskvolume1\\windows\\syswow64\\netutils.dll",
+              "create_family_count": 1,
+              "degree": 3384,
+              "node_id": "ent_627599b14cf262ae11aa9de1",
+              "node_type": "FILE"
+            }
+          ],
+          "MODULE": [
+            {
+              "canonical_key": "\\windows\\system32\\kernel32.dll",
+              "create_family_count": 1,
+              "degree": 37139,
+              "node_id": "ent_c8c48c17dccd81573f09c295",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\systemroot\\system32\\ntdll.dll",
+              "create_family_count": 1,
+              "degree": 37078,
+              "node_id": "ent_a9ff6df18fb424617ccd0b2c",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\system32\\user32.dll",
+              "create_family_count": 1,
+              "degree": 36935,
+              "node_id": "ent_14765d0a403cef8c8baaaa76",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\syswow64\\bcryptprimitives.dll",
+              "create_family_count": 1,
+              "degree": 26678,
+              "node_id": "ent_44faee5af0bae90d2ee12f15",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\syswow64\\cryptbase.dll",
+              "create_family_count": 1,
+              "degree": 26675,
+              "node_id": "ent_1fe00d952518e5cb139ab5a0",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\syswow64\\sspicli.dll",
+              "create_family_count": 1,
+              "degree": 26675,
+              "node_id": "ent_d08bce98fa4db7f2bfd4d7e7",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\syswow64\\rpcrt4.dll",
+              "create_family_count": 1,
+              "degree": 26671,
+              "node_id": "ent_d1fc21a4779c1fe9fb45982b",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\syswow64\\sechost.dll",
+              "create_family_count": 1,
+              "degree": 26670,
+              "node_id": "ent_28879431216c65fb94fef45e",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\syswow64\\msvcrt.dll",
+              "create_family_count": 1,
+              "degree": 26669,
+              "node_id": "ent_75d2f0ddc5d79e9065f208f8",
+              "node_type": "MODULE"
+            },
+            {
+              "canonical_key": "\\windows\\syswow64\\advapi32.dll",
+              "create_family_count": 1,
+              "degree": 26666,
+              "node_id": "ent_1cc2e9431a729960ff60a497",
+              "node_type": "MODULE"
+            }
+          ]
+        },
+        "weakly_connected_component_count": 4815
+      }
+    }
+  },
+  "preserved_local_run_directory": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1",
+  "tests": {
+    "canonical_passed": 621,
+    "focused_passed": 102,
+    "pre_existing_warnings": 3
+  },
+  "graph_execution_source_sha256": {
+    "builder": "b222d278d82420d0e06eb9c9764f1065072171bdc2709956fdd635e4a0814154",
+    "adapter": "fc2f6b77765a2583a96735065f208eef59851f1678223e7167ceb072880c4058",
+    "runner": "f3ff208e6fe5d85b905223af1636ec26fd949575047c81a059271d5471b34d86"
+  },
+  "publication": {
+    "verified_benign": {
+      "graph_computation_completed": true,
+      "colab_runtime_executed": false,
+      "drive_publication_completed": false,
+      "period_role": "verified_benign",
+      "drive_folder_url": "https://drive.google.com/drive/folders/1c2mbppwcHDm8aKVMBvbfV-cYryPz3IDN",
+      "local_output_directory": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1",
+      "published_files": [
+        {
+          "role": "verified_benign",
+          "name": "relation_type_mapping.csv",
+          "id": "1xvCR5TouwsKZk8mT4LyMCjMO733sg8mF",
+          "size": "941",
+          "sha256": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff",
+          "byte_verified": true
+        },
+        {
+          "role": "verified_benign",
+          "name": "hetero_entity_nodes.parquet",
+          "id": "1OLZLoBlOAw_W-EZdP-zrUkC16OnvDZUw",
+          "size": "5229862",
+          "sha256": "365f0732c43af88e02043b3a48691372e16606a7816c9a49ddfcb175124ef0b6",
+          "byte_verified": true
+        },
+        {
+          "role": "verified_benign",
+          "name": "graph_connectivity_audit.json",
+          "id": "13Sg8-0Uma3rbPVhndiTKCs9_9OWkC9_T",
+          "size": "21291",
+          "sha256": "4102d179144e84005cfe01c7291c5f836294662524a181bd65b708f2a8c2d72e",
+          "byte_verified": true
+        },
+        {
+          "role": "verified_benign",
+          "name": "hetero_process_nodes.parquet",
+          "id": "1EJK0GavMQ4IRdM0STXA7WcyU6VAizycf",
+          "size": "10260680",
+          "sha256": "5cefa50dd17cf359142ec83f672e725c036a76af85b9c2afe70bfa55b685c697",
+          "byte_verified": true
+        }
+      ],
+      "missing_files": [
+        {
+          "name": "hetero_graph_edges_bidirectional.parquet",
+          "sha256": "49473185ab0402ac32a3878b31f0fd780ff48bfcd7f64f78f440d6cdc2e74a2d",
+          "size": 717601776
+        },
+        {
+          "name": "hetero_graph_edges_forward.parquet",
+          "sha256": "8c59d3bac2511d78abd7052455eecafccbe434ea922f2cb853effb604c7e9d88",
+          "size": 355212816
+        }
+      ],
+      "errors": [
+        "Forward-edge Parquet (355212816 bytes) exceeds connector's 104857600-byte transfer limit.",
+        "Bidirectional-edge Parquet (717601776 bytes) exceeds local bridge's 536870912-byte upload limit; connector also has 104857600-byte transfer limit."
+      ],
+      "rerun_safety": "Existing output directories are never overwritten; preserve these outputs before any fresh Colab build.",
+      "original_drive_artifacts_modified": false
+    },
+    "evaluation": {
+      "graph_computation_completed": true,
+      "colab_runtime_executed": false,
+      "drive_publication_completed": true,
+      "period_role": "evaluation",
+      "drive_folder_url": "https://drive.google.com/drive/folders/1567bJgoGR3N3_x5zPT6lSN6M800LIofj",
+      "local_output_directory": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1",
+      "published_files": [
+        {
+          "role": "evaluation",
+          "name": "graph_connectivity_audit.json",
+          "id": "1AsxI9bnVjY8rgq53MFd_pVboQpfk-J2b",
+          "size": "19355",
+          "sha256": "408aea039e0e772a5278312f411b26b9d05a4abae5ad52e186d51f0d6ba3a148",
+          "byte_verified": true
+        },
+        {
+          "role": "evaluation",
+          "name": "relation_type_mapping.csv",
+          "id": "13B-HdYmu_odvCjuQs-Vg1UU0D9JXlfTP",
+          "size": "941",
+          "sha256": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff",
+          "byte_verified": true
+        },
+        {
+          "role": "evaluation",
+          "name": "hetero_graph_edges_forward.parquet",
+          "id": "116lmNbbrC1HUwapouKx-TjtgKDZXfpKl",
+          "size": "26740444",
+          "sha256": "2845183ada28f3ca5e493ec0ff7ea0ea958a1e6f148027007a91c12126f2c8d9",
+          "byte_verified": true
+        },
+        {
+          "role": "evaluation",
+          "name": "hetero_entity_nodes.parquet",
+          "id": "1w8wyVZ9ymptK6hrDKl1TOV7LJGYVwIpV",
+          "size": "1378383",
+          "sha256": "4b63d28f80143a0833c6eab61ed63bf80f9362a071a7f52db60a484200385a8e",
+          "byte_verified": true
+        },
+        {
+          "role": "evaluation",
+          "name": "hetero_process_nodes.parquet",
+          "id": "1wz08do6hN3-sByUKUXCgmwZLh2ut5GfI",
+          "size": "1302426",
+          "sha256": "1f1640499bb8077cbc4d4f218a16099a624c8feb9efab597b95a5c41cf4e93fd",
+          "byte_verified": true
+        },
+        {
+          "role": "evaluation",
+          "name": "hetero_graph_edges_bidirectional.parquet",
+          "id": "188m8EvlZbvkQItJv3UxIJi1TIVspRd8W",
+          "size": "54072018",
+          "sha256": "7f96e65ed2e16f908e8837764bbabe51850334b6f15f48e647f3d6566d71cf4c",
+          "byte_verified": true
+        }
+      ],
+      "missing_files": [],
+      "errors": [],
+      "rerun_safety": "Existing output directories are never overwritten; preserve these outputs before any fresh Colab build.",
+      "original_drive_artifacts_modified": false
+    }
+  }
+}

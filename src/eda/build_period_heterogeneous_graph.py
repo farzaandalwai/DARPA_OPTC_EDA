@@ -18,6 +18,12 @@ all inputs are asserted to share one host namespace. DESTINATION has no host
 scope. These are observable path/endpoint identities, not proof of physical
 file identity across renames or versions.
 
+For a controlled legacy-scope comparison, --context-key-policy
+exact_behavior_key_v1 bypasses ALL path/endpoint normalization and forbids
+host scoping. Identity then depends only on period, type and the literal
+behavior_key, with fixed version/hash constants. The canonical_v1 default
+and existing generic graph behavior are unchanged.
+
 Output contract (schema version period_heterogeneous_graph_v1):
 * hetero_process_nodes.parquet: ALL original columns, plus canonical process_id,
   structure_id, period_role, node_id, node_type=PROCESS. Only the explicit feature
@@ -139,6 +145,7 @@ class Config:
     host_scope: str = ""
     host_column: str | None = None
     top_k: int = 20
+    context_key_policy: str = "canonical_v1"
 
 
 def _digest(prefix: str, values: list) -> str:
@@ -338,6 +345,10 @@ def build_graph(cfg: Config) -> dict:
         raise GraphInputError(f"period_role must be one of {PERIOD_ROLES}")
     if cfg.top_k < 1 or (cfg.host_scope and cfg.host_column):
         raise GraphInputError("top_k must be positive; host_scope and host_column are mutually exclusive")
+    if cfg.context_key_policy not in ("canonical_v1", "exact_behavior_key_v1"):
+        raise GraphInputError("Unknown context_key_policy")
+    if cfg.context_key_policy == "exact_behavior_key_v1" and (cfg.host_scope or cfg.host_column):
+        raise GraphInputError("Exact legacy key identity must use only period/type/key, without host scoping")
     output = Path(cfg.output_dir)
     if os.path.lexists(output):
         raise GraphInputError(f"Refusing existing output path: {output}")
@@ -400,7 +411,8 @@ def build_graph(cfg: Config) -> dict:
     for family_column in {cfg.structure_id_column, "structure_id"} & set(behavior.columns):
         if not behavior[family_column].equals(behavior[cfg.behavior_process_column].map(structure_for_process)):
             raise GraphInputError(f"Behavior {family_column} disagrees with PROCESS metadata")
-    keys = [canonical_context_key(kind, value) for kind, value in zip(types, behavior[cfg.behavior_key_column])]
+    keys = (behavior[cfg.behavior_key_column].tolist() if cfg.context_key_policy == "exact_behavior_key_v1"
+            else [canonical_context_key(kind, value) for kind, value in zip(types, behavior[cfg.behavior_key_column])])
     hosts = ["" if kind == "DESTINATION" else host_for_process[process]
              for kind, process in zip(types, behavior[cfg.behavior_process_column])]
     entity_ids = [_digest("ctx_", [cfg.period_role, kind, host, key])
@@ -451,8 +463,11 @@ def build_graph(cfg: Config) -> dict:
         "process_metadata_columns": [name for name in processes.columns if name not in features],
         "context_predictive_features": [],
         "context_identity_policy": {
-            "FILE_MODULE": "EDA5 separator-only Windows path normalization; host-scoped when configured; no family scope",
-            "DESTINATION": "Canonical IP, optional port and uppercase protocol; no host/family scope",
+            "key_policy": cfg.context_key_policy,
+            "FILE_MODULE": ("Literal legacy behavior_key; no normalization or host/family scope" if cfg.context_key_policy == "exact_behavior_key_v1"
+                            else "EDA5 separator-only Windows path normalization; host-scoped when configured; no family scope"),
+            "DESTINATION": ("Literal legacy behavior_key; no reinterpretation or host/family scope" if cfg.context_key_policy == "exact_behavior_key_v1"
+                            else "Canonical IP, optional port and uppercase protocol; no host/family scope"),
             "ambiguous_ipv6": "A valid unbracketed IPv6 endpoint is treated as address-only; explicit [IPv6]:port required for unambiguous port identity",
             "period_namespace": "Node and edge IDs include period_role",
         },
@@ -542,6 +557,7 @@ def build_parser() -> argparse.ArgumentParser:
     hosts.add_argument("--host-scope", default="")
     hosts.add_argument("--host-column", default=None)
     parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--context-key-policy", choices=("canonical_v1", "exact_behavior_key_v1"), default="canonical_v1")
     return parser
 
 

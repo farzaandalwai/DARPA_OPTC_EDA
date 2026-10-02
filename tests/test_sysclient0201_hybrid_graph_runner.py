@@ -186,7 +186,83 @@ def test_notebook_startup_order_thin_runner_and_no_saved_outputs():
     assert "HEAD" in sources[2] and "branch" in sources[2]
     assert "ismount" in sources[3] and "MyDrive" in sources[3]
     assert "prepare_sysclient0201_hybrid_graph.py" in "".join(sources)
+    assert "legacy-audit" in "".join(sources) and "legacy-adapt" in "".join(sources)
+    assert "exact_behavior_key_v1" in "".join(sources) and "split_structure_id" in "".join(sources)
     for cell in cells:
         if cell["cell_type"] == "code":
             assert cell["outputs"] == [] and cell["execution_count"] is None
             compile("".join(cell["source"]), str(path), "exec")
+
+
+@pytest.fixture
+def legacy_cfg(cfg):
+    config = replace(cfg, legacy_inputs=True, behavior_links_dir=cfg.work_dir / "adapted_behavior",
+                     context_key_policy="exact_behavior_key_v1", structure_id_column="split_structure_id")
+    paths = runner.paths_for(config)
+    nodes, edges, creates = [], [], []
+    for role, prefix in (("verified_benign", "train"), ("evaluation", "evaluation")):
+        frame = pd.read_parquet(paths[prefix + "_features"]).drop(columns="event__DESTINATION__OPEN")
+        frame["node_id"] = "old_" + frame.process_id
+        frame["node_type"] = "PROCESS"
+        nodes.append(frame)
+        raw = pd.read_parquet(cfg.data_root / runner.SPLIT_GROUP / "period_process_activity_raw_v1.parquet")
+        raw = raw.loc[raw.period_role == role]
+        lookup = frame.set_index("process_id").split_structure_id
+        edges.append(pd.DataFrame({
+            "period_role": raw.period_role, "split_structure_id": raw.process_id.map(lookup),
+            "source_node_id": "old_" + raw.process_id, "source_node_type": "PROCESS",
+            "target_node_id": role + "_context_" + raw.process_id, "target_node_type": raw.behavior_type,
+            "relation_type": "PROCESS_FILE_READ", "behavior_key": raw.behavior_key,
+            "event_count": raw.attach_event_count, "first_seen_time": pd.Timestamp("2019-01-01"),
+            "last_seen_time": pd.Timestamp("2020-01-01"),
+        }))
+        create = pd.read_parquet(paths[prefix + "_create"])
+        creates.append(pd.DataFrame({
+            "period_role": create.period_role, "split_structure_id": create.parent_process_id.map(lookup),
+            "source_node_id": "old_" + create.parent_process_id, "source_node_type": "PROCESS",
+            "target_node_id": "old_" + create.child_process_id, "target_node_type": "PROCESS",
+            "relation_type": create.relation_type, "event_count": create.create_event_count,
+        }))
+    for name, frames in (("legacy_process_nodes", nodes), ("legacy_behavior_edges", edges), ("legacy_create_edges", creates)):
+        pd.concat(frames, ignore_index=True).to_parquet(paths[name], index=False)
+    return config
+
+
+def test_controlled_legacy_pipeline_feeds_exact_adapted_files(legacy_cfg):
+    cfg = legacy_cfg
+    assert runner.audit_legacy_inputs(cfg)["passed"]
+    proof = runner.adapt_legacy_inputs(cfg)
+    assert proof["event_count_total_before"] == proof["event_count_total_after"] == 14
+    report = runner.audit_inputs(cfg)
+    assert report["audit_passed"], report["errors"]
+    manifest = runner.prepare_inputs(cfg)
+    for role, entry in manifest["graphs"].items():
+        assert Path(entry["builder_configuration"]["behavior"]) == cfg.behavior_links_dir / f"{role}_behavior_links_v1.parquet"
+    results = runner.build_both(cfg)
+    assert all(result["create_family_count"] == 2 for result in results.values())
+    assert all(result["context_identity_policy"]["key_policy"] == "exact_behavior_key_v1" for result in results.values())
+    baseline = runner.legacy_connectivity(cfg)
+    assert all(period["weakly_connected_component_count"] == 2 for period in baseline["periods"].values())
+    assert all(period["shared_context_entity_count"] == 0 for period in baseline["periods"].values())
+    assert all(period["largest_component_process_count"] == 2 for period in baseline["periods"].values())
+
+
+@pytest.mark.parametrize("name,transform", [
+    ("train_features", lambda frame: frame.assign(event__FILE__READ_0=99)),
+    ("train_create", lambda frame: frame.assign(create_event_count=99)),
+    ("legacy_behavior_edges", lambda frame: frame.assign(split_structure_id="wrong")),
+])
+def test_controlled_experiment_mismatches_stop_before_adaptation(legacy_cfg, name, transform):
+    change(legacy_cfg, name, transform)
+    assert not runner.audit_legacy_inputs(legacy_cfg)["passed"]
+    with pytest.raises(runner.graph.GraphInputError, match="Historical/control audit failed"):
+        runner.adapt_legacy_inputs(legacy_cfg)
+    assert not legacy_cfg.behavior_links_dir.exists()
+
+
+def test_adapted_links_cannot_be_modified_after_reconciliation(legacy_cfg):
+    runner.adapt_legacy_inputs(legacy_cfg)
+    change(legacy_cfg, "verified_benign_behavior", lambda frame: frame.assign(attach_event_count=999))
+    report = runner.audit_inputs(legacy_cfg)
+    assert not report["audit_passed"]
+    assert any("Adapted links changed" in error for error in report["errors"])
