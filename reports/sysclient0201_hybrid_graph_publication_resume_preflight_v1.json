@@ -1,0 +1,440 @@
+{
+  "already_valid_files": [
+    "verified_benign/relation_type_mapping.csv",
+    "verified_benign/hetero_entity_nodes.parquet",
+    "verified_benign/graph_connectivity_audit.json",
+    "verified_benign/hetero_process_nodes.parquet",
+    "evaluation/graph_connectivity_audit.json",
+    "evaluation/relation_type_mapping.csv",
+    "evaluation/hetero_graph_edges_forward.parquet",
+    "evaluation/hetero_entity_nodes.parquet",
+    "evaluation/hetero_process_nodes.parquet",
+    "evaluation/hetero_graph_edges_bidirectional.parquet"
+  ],
+  "branch": "eda08",
+  "errors": [
+    "Verification only: expected artifacts remain missing"
+  ],
+  "git_head": "3636eb8fee627034063c3800d202dbbc08822546",
+  "graph_audit_values": {
+    "evaluation": {
+      "bidirectional_edge_count": 624312,
+      "create_edge_count": 7538,
+      "create_families_connected_through_shared_context_count": 715,
+      "destination_node_count": 357,
+      "file_node_count": 13249,
+      "forward_edge_count": 312156,
+      "largest_component_process_count": 8253,
+      "maximum_context_node_degree": 7273,
+      "module_node_count": 1413,
+      "p95_context_node_degree": 30,
+      "percentage_process_nodes_in_largest_component": 98.53151862464183,
+      "process_node_count": 8376,
+      "shared_context_entity_count": 5325,
+      "weakly_connected_component_count": 124
+    },
+    "verified_benign": {
+      "bidirectional_edge_count": 5492742,
+      "create_edge_count": 66554,
+      "create_families_connected_through_shared_context_count": 4808,
+      "destination_node_count": 142,
+      "file_node_count": 55758,
+      "forward_edge_count": 2746371,
+      "largest_component_process_count": 71362,
+      "maximum_context_node_degree": 63784,
+      "module_node_count": 2844,
+      "p95_context_node_degree": 37,
+      "percentage_process_nodes_in_largest_component": 99.99019181997787,
+      "process_node_count": 71369,
+      "shared_context_entity_count": 35316,
+      "weakly_connected_component_count": 8
+    }
+  },
+  "graph_rebuild_attempted": false,
+  "overall_status": "INCOMPLETE",
+  "periods": {
+    "evaluation": {
+      "files": {
+        "graph_connectivity_audit.json": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": null,
+            "sha256": "408aea039e0e772a5278312f411b26b9d05a4abae5ad52e186d51f0d6ba3a148",
+            "size_bytes": 19355
+          },
+          "graph_audit_values": {
+            "bidirectional_edge_count": 624312,
+            "create_edge_count": 7538,
+            "create_families_connected_through_shared_context_count": 715,
+            "destination_node_count": 357,
+            "file_node_count": 13249,
+            "forward_edge_count": 312156,
+            "largest_component_process_count": 8253,
+            "maximum_context_node_degree": 7273,
+            "module_node_count": 1413,
+            "p95_context_node_degree": 30,
+            "percentage_process_nodes_in_largest_component": 98.53151862464183,
+            "process_node_count": 8376,
+            "shared_context_entity_count": 5325,
+            "weakly_connected_component_count": 124
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_evaluation_v1/graph_connectivity_audit.json",
+          "row_count": null,
+          "sha256": "408aea039e0e772a5278312f411b26b9d05a4abae5ad52e186d51f0d6ba3a148",
+          "size_bytes": 19355,
+          "status": "VALID"
+        },
+        "hetero_entity_nodes.parquet": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": 15019,
+            "sha256": "4b63d28f80143a0833c6eab61ed63bf80f9362a071a7f52db60a484200385a8e",
+            "size_bytes": 1378383
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_evaluation_v1/hetero_entity_nodes.parquet",
+          "row_count": 15019,
+          "sha256": "4b63d28f80143a0833c6eab61ed63bf80f9362a071a7f52db60a484200385a8e",
+          "size_bytes": 1378383,
+          "status": "VALID"
+        },
+        "hetero_graph_edges_bidirectional.parquet": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": 624312,
+            "sha256": "7f96e65ed2e16f908e8837764bbabe51850334b6f15f48e647f3d6566d71cf4c",
+            "size_bytes": 54072018
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_evaluation_v1/hetero_graph_edges_bidirectional.parquet",
+          "row_count": 624312,
+          "sha256": "7f96e65ed2e16f908e8837764bbabe51850334b6f15f48e647f3d6566d71cf4c",
+          "size_bytes": 54072018,
+          "status": "VALID"
+        },
+        "hetero_graph_edges_forward.parquet": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": 312156,
+            "sha256": "2845183ada28f3ca5e493ec0ff7ea0ea958a1e6f148027007a91c12126f2c8d9",
+            "size_bytes": 26740444
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_evaluation_v1/hetero_graph_edges_forward.parquet",
+          "row_count": 312156,
+          "sha256": "2845183ada28f3ca5e493ec0ff7ea0ea958a1e6f148027007a91c12126f2c8d9",
+          "size_bytes": 26740444,
+          "status": "VALID"
+        },
+        "hetero_process_nodes.parquet": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": 8376,
+            "sha256": "1f1640499bb8077cbc4d4f218a16099a624c8feb9efab597b95a5c41cf4e93fd",
+            "size_bytes": 1302426
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_evaluation_v1/hetero_process_nodes.parquet",
+          "row_count": 8376,
+          "sha256": "1f1640499bb8077cbc4d4f218a16099a624c8feb9efab597b95a5c41cf4e93fd",
+          "size_bytes": 1302426,
+          "status": "VALID"
+        },
+        "relation_type_mapping.csv": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": 20,
+            "sha256": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff",
+            "size_bytes": 941
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_evaluation_v1/relation_type_mapping.csv",
+          "row_count": 20,
+          "sha256": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff",
+          "size_bytes": 941,
+          "status": "VALID"
+        }
+      },
+      "folder_exists": true,
+      "output_directory": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_evaluation_v1",
+      "overall_status": "COMPLETE"
+    },
+    "verified_benign": {
+      "files": {
+        "graph_connectivity_audit.json": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": null,
+            "sha256": "4102d179144e84005cfe01c7291c5f836294662524a181bd65b708f2a8c2d72e",
+            "size_bytes": 21291
+          },
+          "graph_audit_values": {
+            "bidirectional_edge_count": 5492742,
+            "create_edge_count": 66554,
+            "create_families_connected_through_shared_context_count": 4808,
+            "destination_node_count": 142,
+            "file_node_count": 55758,
+            "forward_edge_count": 2746371,
+            "largest_component_process_count": 71362,
+            "maximum_context_node_degree": 63784,
+            "module_node_count": 2844,
+            "p95_context_node_degree": 37,
+            "percentage_process_nodes_in_largest_component": 99.99019181997787,
+            "process_node_count": 71369,
+            "shared_context_entity_count": 35316,
+            "weakly_connected_component_count": 8
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/graph_connectivity_audit.json",
+          "row_count": null,
+          "sha256": "4102d179144e84005cfe01c7291c5f836294662524a181bd65b708f2a8c2d72e",
+          "size_bytes": 21291,
+          "status": "VALID"
+        },
+        "hetero_entity_nodes.parquet": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": 58744,
+            "sha256": "365f0732c43af88e02043b3a48691372e16606a7816c9a49ddfcb175124ef0b6",
+            "size_bytes": 5229862
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_entity_nodes.parquet",
+          "row_count": 58744,
+          "sha256": "365f0732c43af88e02043b3a48691372e16606a7816c9a49ddfcb175124ef0b6",
+          "size_bytes": 5229862,
+          "status": "VALID"
+        },
+        "hetero_graph_edges_bidirectional.parquet": {
+          "errors": [],
+          "exists": false,
+          "expected": {
+            "row_count": 5492742,
+            "sha256": "49473185ab0402ac32a3878b31f0fd780ff48bfcd7f64f78f440d6cdc2e74a2d",
+            "size_bytes": 717601776
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_graph_edges_bidirectional.parquet",
+          "row_count": null,
+          "sha256": null,
+          "size_bytes": null,
+          "status": "MISSING"
+        },
+        "hetero_graph_edges_forward.parquet": {
+          "errors": [],
+          "exists": false,
+          "expected": {
+            "row_count": 2746371,
+            "sha256": "8c59d3bac2511d78abd7052455eecafccbe434ea922f2cb853effb604c7e9d88",
+            "size_bytes": 355212816
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_graph_edges_forward.parquet",
+          "row_count": null,
+          "sha256": null,
+          "size_bytes": null,
+          "status": "MISSING"
+        },
+        "hetero_process_nodes.parquet": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": 71369,
+            "sha256": "5cefa50dd17cf359142ec83f672e725c036a76af85b9c2afe70bfa55b685c697",
+            "size_bytes": 10260680
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_process_nodes.parquet",
+          "row_count": 71369,
+          "sha256": "5cefa50dd17cf359142ec83f672e725c036a76af85b9c2afe70bfa55b685c697",
+          "size_bytes": 10260680,
+          "status": "VALID"
+        },
+        "relation_type_mapping.csv": {
+          "errors": [],
+          "exists": true,
+          "expected": {
+            "row_count": 20,
+            "sha256": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff",
+            "size_bytes": 941
+          },
+          "path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/relation_type_mapping.csv",
+          "row_count": 20,
+          "sha256": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff",
+          "size_bytes": 941,
+          "status": "VALID"
+        }
+      },
+      "folder_exists": true,
+      "output_directory": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_verified_benign_v1",
+      "overall_status": "INCOMPLETE"
+    }
+  },
+  "restored_files": [],
+  "schema_version": "hybrid_graph_publication_verification_v1",
+  "temporary_files": [],
+  "timestamp_utc": "2026-10-02T20:08:16.283646+00:00",
+  "verified_run_commit": "3636eb8fee627034063c3800d202dbbc08822546",
+  "verified_source_sha256": {
+    "reports/sysclient0201_hybrid_graph_real_run_v1.json": "8f0d9e4e3fcbc66c74acaa50f23be373156870e2dfba58a26d7fd34e75ee24bb",
+    "src/eda/build_period_heterogeneous_graph.py": "b222d278d82420d0e06eb9c9764f1065072171bdc2709956fdd635e4a0814154",
+    "src/eda/eda_05_entity_dictionary.py": "fb3d9cf2cf818b52496504f16dc4d664e60088ff6487bd14f0495cfe6563201e"
+  },
+  "execution_environment": "Drive connector downloads, verified locally; no Colab runtime executed",
+  "colab_runtime_executed": false,
+  "recovery_transport": {
+    "folder_url": "https://drive.google.com/drive/folders/1mU1KY6-2FYP88Ib9GnmgqSZvaZI_eEWH",
+    "colab_path": "/content/drive/MyDrive/DARPA_OPTC_EDA/eda_10_sysclient0201_hybrid_graph_publication_transport_v1",
+    "part_count": 17,
+    "total_bytes": 1072814592,
+    "uploaded_and_readback_sha256_verified": true,
+    "parts": [
+      {
+        "index": 0,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0000",
+        "sha256": "571b4a62b2e1d14a9a693575ab7b335c14f5e9d6c7d56f9b866e948789797870",
+        "size_bytes": 67108864,
+        "id": "1shxaiE4Re_NJsHbf49hTJakjPA8eHM_E",
+        "byte_verified": true
+      },
+      {
+        "index": 1,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0001",
+        "sha256": "4d4afbc8914cd8b9e346df82f33fb24f2b8ff54d0d168630ba0390ec7f818e41",
+        "size_bytes": 67108864,
+        "id": "1ik12z5diqILox4RJJznlHh2cG7-7JZW3",
+        "byte_verified": true
+      },
+      {
+        "index": 2,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0002",
+        "sha256": "04972a5061367360497d752691179b9bcf187574c2cfb7f8f7c1db81a9445fb2",
+        "size_bytes": 67108864,
+        "id": "1mPcoMVFdgrH8yc9vGfZc4Z46K4rkxvOY",
+        "byte_verified": true
+      },
+      {
+        "index": 3,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0003",
+        "sha256": "d99beefc2b449d4bb2fa9f7ff0bc4b63ae93b22501f4574ae55367238793b78e",
+        "size_bytes": 67108864,
+        "id": "1DsvahCmldY1VzzT-xBaprDjG9Xe6kHmv",
+        "byte_verified": true
+      },
+      {
+        "index": 4,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0004",
+        "sha256": "41669e2aeef1f68ee95d611b8fd35df73ef0ea8dc2a617ee142935bcd8beeb47",
+        "size_bytes": 67108864,
+        "id": "1vwOmvdJ7q4klVG1cp7GZpGMMWjLqFvKo",
+        "byte_verified": true
+      },
+      {
+        "index": 5,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0005",
+        "sha256": "f6ed2b3d912ca4ffe50c063c8da0f36c9812fc4db3b362b2babfefbffbd604b1",
+        "size_bytes": 67108864,
+        "id": "1Q3QV384U6SUJeO_jL5BsXacjaSAgw8ry",
+        "byte_verified": true
+      },
+      {
+        "index": 6,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0006",
+        "sha256": "e96d80564b76c5323d263960b0731e7116bbb1d2da225dcb01d0db92f3e46ea1",
+        "size_bytes": 67108864,
+        "id": "1cLyGPbBcLvmpnxAMa81DJVEC5PmqLclj",
+        "byte_verified": true
+      },
+      {
+        "index": 7,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0007",
+        "sha256": "f2c78643722d3ee84735d57b2fe89d6d7ddd1526a96d9c71b16f67ce740c46b9",
+        "size_bytes": 67108864,
+        "id": "1i_uwh7G9HC_oeY9iIrQtiOv4KmiMx9DU",
+        "byte_verified": true
+      },
+      {
+        "index": 8,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0008",
+        "sha256": "dab502789ddcd803fc413bd19f5141837803da14aeb2ad68081289b3561e4820",
+        "size_bytes": 67108864,
+        "id": "1Bf_TclRwyZLFLu-uccD46F7qvRKTo1SP",
+        "byte_verified": true
+      },
+      {
+        "index": 9,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0009",
+        "sha256": "22093e1d26382dce2edc3ddde96214e695c0f4a1762fd0c8d27e418a3d14ce5a",
+        "size_bytes": 67108864,
+        "id": "1hB1nbRg8mquFD54X7g0t-6SKlan4fHfB",
+        "byte_verified": true
+      },
+      {
+        "index": 10,
+        "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0010",
+        "sha256": "da81159029dc30e69144d7686b81101e788662c1b35c62295c6313b3424c4ccc",
+        "size_bytes": 46513136,
+        "id": "1e0Slcw0fD01ZkMsBOCohTAQ0Cc-WQJQH",
+        "byte_verified": true
+      },
+      {
+        "index": 0,
+        "name": "verified_benign__hetero_graph_edges_forward.parquet.part0000",
+        "sha256": "a1b0b7080a32891eeacf3d22ea6d9c7b64d2fc01d4c594835d48d1b5f8355b20",
+        "size_bytes": 67108864,
+        "id": "1dPHfeB1r4Okg1EnCwd4gp4us5Ru4RvUQ",
+        "byte_verified": true
+      },
+      {
+        "index": 1,
+        "name": "verified_benign__hetero_graph_edges_forward.parquet.part0001",
+        "sha256": "73dfd05444c0967025770bc9fae77789cfc2c3694e1a10a17a3e70493511c48b",
+        "size_bytes": 67108864,
+        "id": "10tTmWlTY6jrO3zj13OUWBeqDpOGyweYa",
+        "byte_verified": true
+      },
+      {
+        "index": 2,
+        "name": "verified_benign__hetero_graph_edges_forward.parquet.part0002",
+        "sha256": "b249da61f7220f46e6383e5ff402a5194923d32d7efa7ecd80221e1117295798",
+        "size_bytes": 67108864,
+        "id": "1ut3Xq7tw2gjlvTPOMWUWR2qLe7ArciSh",
+        "byte_verified": true
+      },
+      {
+        "index": 3,
+        "name": "verified_benign__hetero_graph_edges_forward.parquet.part0003",
+        "sha256": "43d8aeda2e7e5524a74f8f6291c1e9b91b1a1d021028c5796256fa2d24c19065",
+        "size_bytes": 67108864,
+        "id": "13O2bHDzodon-Su4WSAyap0b7_fexDIRb",
+        "byte_verified": true
+      },
+      {
+        "index": 4,
+        "name": "verified_benign__hetero_graph_edges_forward.parquet.part0004",
+        "sha256": "8f3b8cc529e6af89d72a5e47019626421399f90e813fe1c7812d9f47aeefbd29",
+        "size_bytes": 67108864,
+        "id": "1p_E9wEu7NJml37w7-JzkkFCaLfejQRRA",
+        "byte_verified": true
+      },
+      {
+        "index": 5,
+        "name": "verified_benign__hetero_graph_edges_forward.parquet.part0005",
+        "sha256": "300cab5cc04fe45f87cb3647e055cbcb92596739c8cbc125f47923ba7aee914f",
+        "size_bytes": 19668496,
+        "id": "18Es8izxnsui2OVENInn8NXDvZ6YjI4Ct",
+        "byte_verified": true
+      }
+    ]
+  },
+  "local_recovery_rehearsal": {
+    "overall_status": "COMPLETE",
+    "execution_environment": "temporary local mirror only, not published Drive folders",
+    "restored_files": [
+      "verified_benign/hetero_graph_edges_forward.parquet",
+      "verified_benign/hetero_graph_edges_bidirectional.parquet"
+    ],
+    "all_12_artifacts_sha256_size_rows_audit_verified": true,
+    "graph_rebuild_attempted": false
+  },
+  "blocker": "Final two training filenames are still absent on Drive. Run the guarded Colab resume notebook; transport bytes are available and verified. No active Colab execution was performed.",
+  "prepared_notebook": "colab/resume_sysclient0201_hybrid_graph_publication.ipynb"
+}

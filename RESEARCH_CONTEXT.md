@@ -9,6 +9,7 @@
 > **Last Verified:** 2026-10-02
 >
 > **Verified Git HEAD before adapter commit:** `b95302d2766660add5cda8c3ed2378e5a8047c07`
+> **Verified completed graph-run commit:** `3636eb8fee627034063c3800d202dbbc08822546`
 > **Repository visibility:** public GitHub repository. Confidential research direction is intentionally excluded.
 
 ## 1. One-paragraph project summary
@@ -20,6 +21,8 @@ This project studies large-scale endpoint telemetry from the corrected DARPA Ope
 ### Current objective
 
 Interpret the completed controlled connectivity experiment and finish training-output Drive publication through a direct filesystem/Colab route. The historical RGCN behavior artifact resolves the earlier aggregate-activity blocker. Both real graphs are complete locally and show near-total PROCESS component collapse. Keep all entities and leave model training outside this milestone; utility/noise and detection performance are not yet measured.
+
+Publication resume is now prepared in `colab/resume_sysclient0201_hybrid_graph_publication.ipynb`. It verifies the pinned run commit (or an unchanged-logic descendant) and immutable real-run manifest, checks both published folders before writing, and copies only missing completed bytes. All ten already-published files were freshly downloaded and hash/count/audit verified. The two missing training edge files are available as 17 lossless, readback-hash-verified transport parts in Drive's `eda_10_sysclient0201_hybrid_graph_publication_transport_v1` folder. A temporary local recovery rehearsal verified all twelve outputs; **this is not final Drive publication or a Colab execution**. Training remains 4/6 and evaluation 6/6 until the guarded notebook completes. Existing mismatches stop; atomic no-replace promotion is required, with verified temporary files retained if the filesystem does not support it. Historical publication markers remain untouched. See `reports/sysclient0201_hybrid_graph_publication_resume_preflight_v1.json` for hashes/counts/evidence and `reports/sysclient0201_hybrid_graph_resume_transport_v1.json` for part order and hashes.
 
 ### Long-term private research direction
 
@@ -51,11 +54,13 @@ Intentionally omitted. This repository is public, so confidential research direc
   - `src/eda/eda_01_dataset_intake.py` through `src/eda/eda_10_continuous_process_structure.py`
   - `src/eda/optc_streaming_parser.py`, `src/eda/cache_resume.py`, and `src/eda/manifest_utils.py`
 - **Important notebooks:** `colab/run_sysclient0201_hybrid_graph.ipynb`; mounts Drive, synchronizes `eda08` into `/content/DARPA_OPTC_EDA`, prints branch/HEAD, confirms mount, then invokes repository logic. No saved execution outputs.
+- **Completed-run publication notebook:** `colab/resume_sysclient0201_hybrid_graph_publication.ipynb`; use this instead of the build notebook for the existing output folders. It never calls the graph builder or modifies EDA10/context identity/training policy. No saved execution outputs.
 - **Tracked artifacts:** EDA1 outputs and schema/connectivity audit reports, not raw data or models. Complete real graph outputs, adapter links and input snapshots are preserved under ignored `data/local_runs/sysclient0201_hybrid_graph_v1/{artifacts,work}/`.
 - **Saved metadata/configuration:** `data/period_maps/optc_pilot_period_map_v1.{csv,md}`, `configs/eda_01_*_paths.example.json`, EDA1 intake CSV/TXT files, and code-generated run schemas.
 - **Untracked pre-existing material:** `.cursor/`, six EDA9/EDA10 review directories, and corresponding ZIP files. These review copies contain source/tests/diffs, not executed research artifacts. They also cause repository-root `pytest` collection-name collisions.
 - **Verification:** `python3 -m pytest -q tests` passed **519 tests** with 3 timestamp deprecation warnings on 2026-09-30. Focused EDA9/EDA10/period-map tests passed **89 tests**. Running `python3 -m pytest -q` from the repository root failed at collection with 6 import-file-mismatch errors because duplicate test filenames exist in the untracked review directories.
 - **Current verification:** adapter/builder/runner focused suite **102 passed**; canonical suite **621 passed**, 3 pre-existing timestamp warnings, on 2026-10-02. Tests are synthetic; the separately saved real-run report contains dataset measurements.
+- **Publication-resume verification:** safety suite **27 passed**; latest canonical suite **648 passed**, 3 pre-existing timestamp warnings. Drive artifacts and recovery parts separately verified by readback; a local-only recovery rehearsal passed, while final Drive publication still awaits Colab.
 - **State caveat:** the branch name remains `eda08` even though commits on it include EDA9 and EDA10. Treat commit identity, not the branch label, as authoritative.
 - **Tracked EDA1-output conflict:** `outputs/eda_01_intake/README_eda01_intake.txt` records a `/private/tmp` zero-byte test run, `T1_dataset_intake_ledger.csv` records a local 12.5 GB 2019-09-16 archive, and `T1B_master_archive_inventory.csv` marks all ten archives pending. These files came from different/stale runs and must not be combined as one current intake result.
 

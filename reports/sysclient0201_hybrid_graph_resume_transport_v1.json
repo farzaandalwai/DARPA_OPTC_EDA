@@ -1,0 +1,126 @@
+{
+  "files": {
+    "verified_benign/hetero_graph_edges_bidirectional.parquet": {
+      "expected": {
+        "row_count": 5492742,
+        "sha256": "49473185ab0402ac32a3878b31f0fd780ff48bfcd7f64f78f440d6cdc2e74a2d",
+        "size_bytes": 717601776
+      },
+      "parts": [
+        {
+          "index": 0,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0000",
+          "sha256": "571b4a62b2e1d14a9a693575ab7b335c14f5e9d6c7d56f9b866e948789797870",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 1,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0001",
+          "sha256": "4d4afbc8914cd8b9e346df82f33fb24f2b8ff54d0d168630ba0390ec7f818e41",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 2,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0002",
+          "sha256": "04972a5061367360497d752691179b9bcf187574c2cfb7f8f7c1db81a9445fb2",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 3,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0003",
+          "sha256": "d99beefc2b449d4bb2fa9f7ff0bc4b63ae93b22501f4574ae55367238793b78e",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 4,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0004",
+          "sha256": "41669e2aeef1f68ee95d611b8fd35df73ef0ea8dc2a617ee142935bcd8beeb47",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 5,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0005",
+          "sha256": "f6ed2b3d912ca4ffe50c063c8da0f36c9812fc4db3b362b2babfefbffbd604b1",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 6,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0006",
+          "sha256": "e96d80564b76c5323d263960b0731e7116bbb1d2da225dcb01d0db92f3e46ea1",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 7,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0007",
+          "sha256": "f2c78643722d3ee84735d57b2fe89d6d7ddd1526a96d9c71b16f67ce740c46b9",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 8,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0008",
+          "sha256": "dab502789ddcd803fc413bd19f5141837803da14aeb2ad68081289b3561e4820",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 9,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0009",
+          "sha256": "22093e1d26382dce2edc3ddde96214e695c0f4a1762fd0c8d27e418a3d14ce5a",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 10,
+          "name": "verified_benign__hetero_graph_edges_bidirectional.parquet.part0010",
+          "sha256": "da81159029dc30e69144d7686b81101e788662c1b35c62295c6313b3424c4ccc",
+          "size_bytes": 46513136
+        }
+      ]
+    },
+    "verified_benign/hetero_graph_edges_forward.parquet": {
+      "expected": {
+        "row_count": 2746371,
+        "sha256": "8c59d3bac2511d78abd7052455eecafccbe434ea922f2cb853effb604c7e9d88",
+        "size_bytes": 355212816
+      },
+      "parts": [
+        {
+          "index": 0,
+          "name": "verified_benign__hetero_graph_edges_forward.parquet.part0000",
+          "sha256": "a1b0b7080a32891eeacf3d22ea6d9c7b64d2fc01d4c594835d48d1b5f8355b20",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 1,
+          "name": "verified_benign__hetero_graph_edges_forward.parquet.part0001",
+          "sha256": "73dfd05444c0967025770bc9fae77789cfc2c3694e1a10a17a3e70493511c48b",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 2,
+          "name": "verified_benign__hetero_graph_edges_forward.parquet.part0002",
+          "sha256": "b249da61f7220f46e6383e5ff402a5194923d32d7efa7ecd80221e1117295798",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 3,
+          "name": "verified_benign__hetero_graph_edges_forward.parquet.part0003",
+          "sha256": "43d8aeda2e7e5524a74f8f6291c1e9b91b1a1d021028c5796256fa2d24c19065",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 4,
+          "name": "verified_benign__hetero_graph_edges_forward.parquet.part0004",
+          "sha256": "8f3b8cc529e6af89d72a5e47019626421399f90e813fe1c7812d9f47aeefbd29",
+          "size_bytes": 67108864
+        },
+        {
+          "index": 5,
+          "name": "verified_benign__hetero_graph_edges_forward.parquet.part0005",
+          "sha256": "300cab5cc04fe45f87cb3647e055cbcb92596739c8cbc125f47923ba7aee914f",
+          "size_bytes": 19668496
+        }
+      ]
+    }
+  },
+  "schema_version": "completed_graph_bytes_transport_v1",
+  "verified_run_commit": "3636eb8fee627034063c3800d202dbbc08822546"
+}
