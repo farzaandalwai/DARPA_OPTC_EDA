@@ -4,21 +4,24 @@ The immutable real-run audit is the artifact manifest. All existing outputs in
 both periods are inspected before any graph write. A mismatch fails closed.
 Recovery accepts complete local outputs or lossless transport parts; each source
 and the assembled temporary file must match the original run's SHA256 and size.
-Final promotion is atomic and non-overwriting; unsupported filesystems stop.
-Historical publication_status.json markers and partial files are never deleted.
+Final publication uses exclusive-create streamed copying, then full readback
+verification, without rename/link operations. Verified temporary reconstructions
+are reused before consulting recovery chunks. Only a successfully published and
+reverified temporary source may be removed; failed-copy evidence is preserved.
+Historical publication_status.json markers are never replaced.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import ctypes
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 
@@ -102,7 +105,7 @@ def expected_files(manifest: dict) -> dict:
     return result
 
 
-def inspect(path: Path, expected: dict, audit: dict) -> dict:
+def inspect(path: Path, expected: dict, audit: dict, *, artifact_name: str | None = None) -> dict:
     info = {"path": str(path), "exists": path.exists() or path.is_symlink(),
             "expected": expected, "size_bytes": None, "sha256": None,
             "row_count": None, "status": "MISSING", "errors": []}
@@ -116,11 +119,12 @@ def inspect(path: Path, expected: dict, audit: dict) -> dict:
         for key in ("size_bytes", "sha256"):
             if info[key] != expected[key]:
                 info["errors"].append(f"{key} differs from completed run")
-        if path.suffix == ".parquet":
+        suffix = Path(artifact_name or path.name).suffix
+        if suffix == ".parquet":
             parquet = pq.ParquetFile(path)
             info.update(row_count=parquet.metadata.num_rows, columns=parquet.schema_arrow.names,
                         column_types={f.name: str(f.type) for f in parquet.schema_arrow})
-        elif path.suffix == ".csv":
+        elif suffix == ".csv":
             with path.open(newline="", encoding="utf-8") as handle:
                 reader = csv.DictReader(handle)
                 info["columns"] = reader.fieldnames
@@ -213,22 +217,63 @@ def recovery_sources(role: str, name: str, spec: dict, audit: dict,
     return paths
 
 
-def promote_no_replace(temporary: Path, final: Path) -> None:
-    """No overwrite, including concurrent publishers. Fail closed on unsupported FUSE."""
-    if sys.platform.startswith("linux"):
-        libc = ctypes.CDLL(None, use_errno=True)
-        rename = getattr(libc, "renameat2", None)
-        if rename is None:
-            raise PublicationError("STOP: atomic no-replace rename unavailable; verified temporary preserved")
-        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-        rename.restype = ctypes.c_int
-        if rename(-100, os.fsencode(temporary), -100, os.fsencode(final), 1):
-            code = ctypes.get_errno()
-            raise PublicationError(f"STOP: no-replace promotion failed ({os.strerror(code)}); temporary preserved")
+def verified_temporary(folder: Path, name: str, spec: dict, audit: dict,
+                       report: dict) -> Path | None:
+    """Inspect existing reconstruction evidence without changing or deleting it."""
+    selected = None
+    for path in sorted(folder.glob(f".{name}.*.partial")):
+        checked = inspect(path, spec, audit, artifact_name=name)
+        report["temporary_inspections"].append(checked)
+        if checked["status"] == "VALID" and selected is None:
+            selected = path
+    return selected
+
+
+def copy_verified_to_final(temporary: Path, final: Path, spec: dict, audit: dict,
+                           report: dict) -> None:
+    """Drive-compatible copy; final files are never opened with truncate/replace."""
+    if final.exists() or final.is_symlink():
+        raise PublicationError(f"STOP: final destination appeared before copy: {final}")
+    source = inspect(temporary, spec, audit, artifact_name=final.name)
+    if source["status"] != "VALID":
+        raise PublicationError(f"STOP: temporary source does not verify: {temporary}: {source['errors']}")
+    result = {"source": str(temporary), "destination": str(final), "status": "COPYING",
+              "temporary_deleted": False}
+    report["copy_results"].append(result)
+    created = False
+    try:
+        # O_EXCL prevents a concurrent existing destination from being overwritten.
+        # Google Drive FUSE supports ordinary file creation/copy, not renameat2.
+        with final.open("xb") as output:
+            created = True
+            with temporary.open("rb") as source_handle:
+                shutil.copyfileobj(source_handle, output, length=8 * 1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+        checked = inspect(final, spec, audit)
+        result["final_verification"] = checked
+        if checked["status"] != "VALID":
+            raise PublicationError(f"final verification failed: {checked['errors']}")
+        result["status"] = "VERIFIED"
+    except (OSError, PublicationError, ValueError, TypeError) as error:
+        result["status"] = "INVALID_PARTIAL" if created else "DESTINATION_CONFLICT"
+        if created:
+            report["invalid_partial_destinations"].append(str(final))
+        raise PublicationError(
+            f"STOP: copy/verification failed: {final}: {error}; "
+            f"{'final marked INVALID_PARTIAL; ' if created else ''}verified temporary preserved: {temporary}"
+        ) from error
+    # Recheck the source before deleting evidence: if it changed during copying,
+    # retain it. An interrupted/failed copy never reaches this cleanup branch.
+    if inspect(temporary, spec, audit, artifact_name=final.name)["status"] == "VALID":
+        try:
+            temporary.unlink()
+            result["temporary_deleted"] = True
+            report["deleted_verified_temporary_files"].append(str(temporary))
+        except OSError as error:
+            report["warnings"].append(f"Verified final retained; temporary cleanup failed: {temporary}: {error}")
     else:
-        # Local preparation/tests on macOS. Hard links also refuse existing names.
-        os.link(temporary, final)
-        temporary.unlink()  # only our unique temporary link; final bytes are retained
+        report["warnings"].append(f"Verified final retained; changed temporary source preserved: {temporary}")
 
 
 def resume(root: Path, manifest: dict, *, checkout: dict,
@@ -237,7 +282,11 @@ def resume(root: Path, manifest: dict, *, checkout: dict,
     report = {"schema_version": "hybrid_graph_publication_verification_v1",
               "timestamp_utc": datetime.now(timezone.utc).isoformat(), **checkout,
               "overall_status": "INCOMPLETE", "restored_files": [], "already_valid_files": [],
-              "temporary_files": [], "errors": [], "graph_rebuild_attempted": False}
+              "temporary_files": [], "temporary_inspections": [], "reused_temporary_files": [],
+              "reconstructed_temporary_files": [], "deleted_verified_temporary_files": [],
+              "copy_results": [], "invalid_partial_destinations": [], "warnings": [],
+              "publication_strategy": "exclusive_create_streamed_copy_with_readback_v1",
+              "errors": [], "graph_rebuild_attempted": False}
     state = inventory(root, manifest)
     report["periods"] = state
     report["already_valid_files"] = [f"{r}/{n}" for r, g in state.items()
@@ -251,10 +300,14 @@ def resume(root: Path, manifest: dict, *, checkout: dict,
         if missing and verify_only:
             raise PublicationError("Verification only: expected artifacts remain missing")
         # Preflight ALL missing recovery bytes before any output writes.
-        plans = [(r, n, spec, recovery_sources(r, n, spec, manifest["hybrid_graphs"][r],
-                                               completed_root, parts_root, transport))
-                 for r, n, spec in missing]
-        for role, name, spec, sources in plans:
+        plans = []
+        for role, name, spec in missing:
+            audit = manifest["hybrid_graphs"][role]
+            temporary = verified_temporary(root / OUTPUT_NAMES[role], name, spec, audit, report)
+            sources = [] if temporary else recovery_sources(role, name, spec, audit,
+                                                           completed_root, parts_root, transport)
+            plans.append((role, name, spec, temporary, sources))
+        for role, name, spec, temporary, sources in plans:
             final = root / OUTPUT_NAMES[role] / name
             now = inspect(final, spec, manifest["hybrid_graphs"][role])
             if now["status"] == "VALID":
@@ -262,28 +315,33 @@ def resume(root: Path, manifest: dict, *, checkout: dict,
                 continue
             if now["status"] != "MISSING":
                 raise PublicationError(f"STOP: destination changed during recovery: {final}")
-            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".partial", dir=final.parent)
-            temporary = Path(temporary_name)
-            report["temporary_files"].append(str(temporary))
-            with os.fdopen(descriptor, "wb") as output:
-                for source in sources:
-                    with source.open("rb") as handle:
-                        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-                            output.write(block)
-                output.flush()
-                os.fsync(output.fileno())
-            # Temporary suffix is not parquet/json: inspect using the final contract
-            # after full byte verification and an explicit Parquet/JSON metadata read.
-            if temporary.stat().st_size != spec["size_bytes"] or digest(temporary) != spec["sha256"]:
-                raise PublicationError(f"STOP: temporary bytes mismatch; retained: {temporary}")
-            if name.endswith(".parquet") and pq.ParquetFile(temporary).metadata.num_rows != spec["row_count"]:
-                raise PublicationError(f"STOP: temporary row count mismatch: {temporary}")
-            promote_no_replace(temporary, final)
+            if temporary is None:
+                descriptor, temporary_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".partial", dir=final.parent)
+                temporary = Path(temporary_name)
+                report["reconstructed_temporary_files"].append(str(temporary))
+                report["temporary_files"].append(str(temporary))
+                with os.fdopen(descriptor, "wb") as output:
+                    for source in sources:
+                        with source.open("rb") as handle:
+                            for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+                                output.write(block)
+                    output.flush()
+                    os.fsync(output.fileno())
+            else:
+                report["reused_temporary_files"].append(str(temporary))
+                report["temporary_files"].append(str(temporary))
+            copy_verified_to_final(temporary, final, spec, manifest["hybrid_graphs"][role], report)
             report["restored_files"].append(f"{role}/{name}")
     except (PublicationError, OSError, ValueError, KeyError, TypeError) as error:
         report["errors"].append(str(error))
     state = inventory(root, manifest)  # full final readback, including SHA256
     report["periods"] = state
+    for path in report["invalid_partial_destinations"]:
+        for group in state.values():
+            for file in group["files"].values():
+                if file["path"] == path:
+                    file["status"] = "INVALID_PARTIAL"
+                    group["overall_status"] = "INCOMPLETE"
     if not report["errors"]:
         try:
             assert_no_mismatches(state)
@@ -348,6 +406,10 @@ def print_report(report: dict) -> None:
             print("  audit:", json.dumps(values, sort_keys=True))
     print("restored:", report.get("restored_files", []))
     print("already valid:", report.get("already_valid_files", []))
+    print("reused temporary:", report.get("reused_temporary_files", []))
+    print("invalid/partial final destinations:", report.get("invalid_partial_destinations", []))
+    for warning in report.get("warnings", []):
+        print("WARNING:", warning)
     for error in report.get("errors", []):
         print("BLOCKER:", error)
 

@@ -3,11 +3,9 @@
 from copy import deepcopy
 import json
 from pathlib import Path
-import errno
 import shutil
 import subprocess
 import sys
-from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -200,60 +198,154 @@ def test_bad_parts_stop_before_destination_writes(run, tmp_path, problem):
     assert snapshots(run[1]) == before
 
 
-def test_unsupported_promotion_preserves_temporary_and_valid_files(run, monkeypatch):
+def test_failed_copy_preserves_temporary_and_invalid_final_evidence(run, monkeypatch):
     path = missing(run)
     before = snapshots(run[1])
-    def fail(*args):
-        raise publication.PublicationError("STOP: no-replace promotion unsupported")
-    monkeypatch.setattr(publication, "promote_no_replace", fail)
+    def fail(source, output, **kwargs):
+        output.write(b"partial evidence")
+        raise OSError("simulated transfer interruption")
+    monkeypatch.setattr(publication.shutil, "copyfileobj", fail)
     report = call(run, completed_root=run[0])
     assert report["overall_status"] == "INCOMPLETE"
-    assert not path.exists()
+    assert path.read_bytes() == b"partial evidence"
+    assert report["invalid_partial_destinations"] == [str(path)]
+    assert report["periods"]["verified_benign"]["files"][path.name]["status"] == "INVALID_PARTIAL"
     temporary = Path(report["temporary_files"][0])
     assert publication.digest(temporary) == publication.digest(run[0] / path.parent.name / path.name)
     assert all(snapshots(run[1])[key] == value for key, value in before.items())
+    assert not report["deleted_verified_temporary_files"]
+    # A retry refuses the mismatched existing final, rather than overwriting it.
+    after = snapshots(run[1])
+    assert "existing artifact mismatch" in call(run, completed_root=run[0])["errors"][0]
+    assert snapshots(run[1]) == after
 
 
 def test_destination_race_never_overwrites(run, monkeypatch):
     path = missing(run)
-    promote = publication.promote_no_replace
-    def race(temporary, final):
+    publish = publication.copy_verified_to_final
+    def race(temporary, final, spec, audit, report):
         final.write_bytes(b"concurrent writer")
-        promote(temporary, final)
-    monkeypatch.setattr(publication, "promote_no_replace", race)
+        publish(temporary, final, spec, audit, report)
+    monkeypatch.setattr(publication, "copy_verified_to_final", race)
     report = call(run, completed_root=run[0])
     assert report["overall_status"] == "INCOMPLETE"
     assert path.read_bytes() == b"concurrent writer"
     assert Path(report["temporary_files"][0]).is_file()
 
 
-@pytest.mark.parametrize("problem", ["success", "unsupported", "exists", "missing_api"])
-def test_linux_no_replace_call_contract(tmp_path, monkeypatch, problem):
-    temporary, final = tmp_path / "tmp.partial", tmp_path / "final.parquet"
-    temporary.write_bytes(b"verified bytes")
-    if problem == "exists":
-        final.write_bytes(b"existing bytes")
-    calls = []
-    def rename(source_fd, source, target_fd, target, flags):
-        calls.append((source_fd, source, target_fd, target, flags))
-        if problem == "success":
-            temporary.rename(final)
-            return 0
-        return -1
-    library = SimpleNamespace() if problem == "missing_api" else SimpleNamespace(renameat2=rename)
-    monkeypatch.setattr(publication, "sys", SimpleNamespace(platform="linux"))
-    monkeypatch.setattr(publication.ctypes, "CDLL", lambda *args, **kwargs: library)
-    monkeypatch.setattr(publication.ctypes, "get_errno", lambda: errno.EEXIST if problem == "exists" else errno.ENOTSUP)
-    if problem == "success":
-        publication.promote_no_replace(temporary, final)
-        assert final.read_bytes() == b"verified bytes" and not temporary.exists()
-    else:
-        with pytest.raises(publication.PublicationError, match="STOP"):
-            publication.promote_no_replace(temporary, final)
-        assert temporary.read_bytes() == b"verified bytes"
-        assert final.read_bytes() == b"existing bytes" if problem == "exists" else not final.exists()
-    if calls:
-        assert calls == [(-100, bytes(temporary), -100, bytes(final), 1)]
+def test_exclusive_create_handles_race_after_destination_check(run, monkeypatch):
+    final, temporary = existing_temporary(run, "hetero_graph_edges_forward.parquet")
+    original_open = Path.open
+    def racing_open(path, mode="r", *args, **kwargs):
+        if path == final and mode == "xb" and not path.exists():
+            with original_open(final, "wb") as writer:
+                writer.write(b"concurrent destination")
+        return original_open(path, mode, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", racing_open)
+    report = call(run)
+    assert report["overall_status"] == "INCOMPLETE"
+    assert final.read_bytes() == b"concurrent destination"
+    assert temporary.is_file()
+    assert report["copy_results"][0]["status"] == "DESTINATION_CONFLICT"
+    assert report["invalid_partial_destinations"] == []
+
+
+def existing_temporary(run, name, suffix="nhv7lc4g"):
+    final = missing(run, name=name)
+    temporary = final.parent / f".{name}.{suffix}.partial"
+    shutil.copyfile(run[0] / final.parent.name / name, temporary)
+    return final, temporary
+
+
+def test_reuse_both_verified_temporaries_without_any_reconstruction(run, monkeypatch):
+    pairs = [existing_temporary(run, name) for name in
+             ("hetero_graph_edges_forward.parquet", "hetero_graph_edges_bidirectional.parquet")]
+    def forbidden(*args, **kwargs):
+        pytest.fail("verified temporaries must bypass chunks/reconstruction/rename/link")
+    monkeypatch.setattr(publication, "recovery_sources", forbidden)
+    monkeypatch.setattr(publication.tempfile, "mkstemp", forbidden)
+    monkeypatch.setattr(publication.os, "rename", forbidden)
+    monkeypatch.setattr(publication.os, "link", forbidden)
+    report = call(run)
+    assert report["overall_status"] == "COMPLETE"
+    assert set(report["reused_temporary_files"]) == {str(t) for _, t in pairs}
+    assert report["reconstructed_temporary_files"] == []
+    assert set(report["deleted_verified_temporary_files"]) == {str(t) for _, t in pairs}
+    for final, temporary in pairs:
+        assert not temporary.exists()
+        assert publication.digest(final) == publication.digest(run[0] / final.parent.name / final.name)
+    before = snapshots(run[1])
+    assert call(run)["restored_files"] == []
+    assert snapshots(run[1]) == before
+
+
+def test_reuse_bidirectional_and_reconstruct_only_forward_from_parts(run, tmp_path, monkeypatch):
+    bidirectional, temporary = existing_temporary(run, "hetero_graph_edges_bidirectional.parquet")
+    forward = missing(run)
+    parts = tmp_path / "forward_parts_only"
+    transport = publication.pack_sources(run[2], run[0], parts,
+                                          ["verified_benign/" + forward.name], chunk_bytes=100)
+    recovery = publication.recovery_sources
+    requested = []
+    def observed(role, name, *args):
+        requested.append(name)
+        return recovery(role, name, *args)
+    monkeypatch.setattr(publication, "recovery_sources", observed)
+    report = call(run, parts_root=parts, transport=transport)
+    assert report["overall_status"] == "COMPLETE"
+    assert requested == [forward.name]
+    assert report["reused_temporary_files"] == [str(temporary)]
+    assert len(report["reconstructed_temporary_files"]) == 1
+    assert forward.name in report["reconstructed_temporary_files"][0]
+    assert all(copy["status"] == "VERIFIED" for copy in report["copy_results"])
+
+
+def test_invalid_temp_evidence_preserved_while_valid_temp_is_reused(run):
+    final, temporary = existing_temporary(run, "hetero_graph_edges_forward.parquet", "verified")
+    corrupt = final.parent / f".{final.name}.broken.partial"
+    corrupt.write_bytes(b"old failed reconstruction")
+    report = call(run)
+    assert report["overall_status"] == "COMPLETE"
+    assert report["reused_temporary_files"] == [str(temporary)]
+    assert corrupt.read_bytes() == b"old failed reconstruction"
+    assert any(t["status"] == "MISMATCH" for t in report["temporary_inspections"])
+
+
+def test_final_verification_failure_does_not_delete_source(run, monkeypatch):
+    final, temporary = existing_temporary(run, "hetero_graph_edges_forward.parquet")
+    def bad_copy(source, output, **kwargs):
+        output.write(b"bad bytes despite successful return")
+    monkeypatch.setattr(publication.shutil, "copyfileobj", bad_copy)
+    report = call(run)
+    assert report["overall_status"] == "INCOMPLETE"
+    assert report["copy_results"][0]["status"] == "INVALID_PARTIAL"
+    assert temporary.is_file() and final.is_file()
+    assert not report["deleted_verified_temporary_files"]
+
+
+def test_cleanup_only_after_final_hash_size_and_rows_verified(run, monkeypatch):
+    final, temporary = existing_temporary(run, "hetero_graph_edges_forward.parquet")
+    spec = publication.expected_files(run[2])["verified_benign"][final.name]
+    unlink = Path.unlink
+    def guarded_unlink(path, *args, **kwargs):
+        assert path == temporary
+        assert publication.inspect(final, spec, run[2]["hybrid_graphs"]["verified_benign"])["status"] == "VALID"
+        return unlink(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", guarded_unlink)
+    report = call(run)
+    assert report["overall_status"] == "COMPLETE"
+    assert report["copy_results"][0]["temporary_deleted"]
+
+
+def test_cleanup_failure_preserves_valid_final_and_temp(run, monkeypatch):
+    final, temporary = existing_temporary(run, "hetero_graph_edges_forward.parquet")
+    def denied(*args, **kwargs):
+        raise PermissionError("retain source")
+    monkeypatch.setattr(Path, "unlink", denied)
+    report = call(run)
+    assert report["overall_status"] == "COMPLETE"
+    assert final.is_file() and temporary.is_file()
+    assert report["warnings"]
 
 
 def test_verify_only_and_missing_folder_are_read_only(run):
