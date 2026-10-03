@@ -4,25 +4,26 @@
 >
 > **Evidence precedence:** executed repository artifacts and saved run metadata > current code and tests > explicitly supplied historical context > `NEEDS VERIFICATION`. A historical claim is not promoted to current fact merely because it appears in this file.
 >
-> **Last Updated:** 2026-10-02 (America/Los_Angeles)
+> **Last Updated:** 2026-10-03 (America/Los_Angeles)
 >
-> **Last Verified:** 2026-10-02
+> **Last Verified:** 2026-10-03
 >
 > **Verified Git HEAD before adapter commit:** `b95302d2766660add5cda8c3ed2378e5a8047c07`
 > **Verified completed graph-run commit:** `3636eb8fee627034063c3800d202dbbc08822546`
+> **Verified publication / pre-hub-audit HEAD:** `671d2487744612ee662bfb0994a99baf50f6c989`
 > **Repository visibility:** public GitHub repository. Confidential research direction is intentionally excluded.
 
 ## 1. One-paragraph project summary
 
-This project studies large-scale endpoint telemetry from the corrected DARPA Operationally Transparent Cyber (OpTC) dataset using provenance graphs, leakage-safe temporal separation, graph representation learning, anomaly detection and investigation workflows. EDA stages through EDA10, the hybrid graph builder, a lossless historical behavior adapter and the thin Colab runner are implemented. Both real SysClient0201 hybrid graphs have now been built locally from authentic Drive artifacts, preserving the 70 features, explicit periods, CREATE topology, relations, literal context keys and event counts. Sharing context alone increases largest-component PROCESS concentration from 57.836% to 99.990% in training and 77.543% to 98.532% in evaluation. Common Windows modules dominate the hubs. Complete outputs are preserved in ignored local storage; evaluation is fully published to Drive, while two oversized training edge files remain blocked by connector limits. No Colab runtime, RGCN training, embeddings or model evaluation occurred; no model-performance claim is supported. Other six-host claims remain unverified.
+This project studies large-scale endpoint telemetry from the corrected DARPA Operationally Transparent Cyber (OpTC) dataset using provenance graphs, leakage-safe temporal separation, graph representation learning, anomaly detection and investigation workflows. EDA stages through EDA10, the hybrid graph builder, a lossless historical behavior adapter and thin Colab runners are implemented. Both real SysClient0201 hybrid graphs are complete locally and published/verified in Drive. Sharing context increases largest-component PROCESS concentration from 57.836% to 99.990% in training and 77.543% to 98.532% in evaluation. The training-first hub-control audit now tests 19 mask/weight policies without modifying either full graph or EDA10. MODULEs dominate exposure, but FILE/DESTINATION sharing alone still produces a 98.187% training giant component. No RGCN, OCSVM, embeddings, or model evaluation occurred; no detection-performance claim is supported. Other six-host claims remain unverified.
 
 ## 2. Current research objective
 
 ### Current objective
 
-Interpret the completed controlled connectivity experiment and finish training-output Drive publication through a direct filesystem/Colab route. The historical RGCN behavior artifact resolves the earlier aggregate-activity blocker. Both real graphs are complete locally and show near-total PROCESS component collapse. Keep all entities and leave model training outside this milestone; utility/noise and detection performance are not yet measured.
+Interpret the completed training-first hub-control audit and decide acceptable cross-family-context loss versus message-passing exposure before any model training. Publication is complete. Full provenance artifacts remain untouched; filtered policies exist only as context masks and audit results. Utility/noise and detection performance are not yet measured.
 
-Publication resume is now prepared in `colab/resume_sysclient0201_hybrid_graph_publication.ipynb`. It verifies the pinned run commit (or an unchanged-logic descendant) and immutable real-run manifest, checks both published folders before writing, and copies only missing completed bytes. All ten already-published files were freshly downloaded and hash/count/audit verified. The two missing training edge files are available as 17 lossless, readback-hash-verified transport parts in Drive's `eda_10_sysclient0201_hybrid_graph_publication_transport_v1` folder. A temporary local recovery rehearsal verified all twelve outputs; **this is not final Drive publication or a Colab execution**. Training remains 4/6 and evaluation 6/6 until the guarded notebook completes. Existing mismatches stop; atomic no-replace promotion is required, with verified temporary files retained if the filesystem does not support it. Historical publication markers remain untouched. See `reports/sysclient0201_hybrid_graph_publication_resume_preflight_v1.json` for hashes/counts/evidence and `reports/sysclient0201_hybrid_graph_resume_transport_v1.json` for part order and hashes.
+Publication completed in Colab at `671d2487744612ee662bfb0994a99baf50f6c989`, using verified temporary reuse and an exclusive-create normal streamed copy with final hash/count readback (no atomic rename/link requirement). Both periods are 6/6 COMPLETE in `publication_verification_5850b2b5d6254a36b8ed00df6a26f4b3.json`, Drive file ID `1Ah-f_12t6zF3owcHq8vTK28J_mDkRhQd`; a readback copy is preserved in ignored local run storage. Bidirectional temporary bytes were reused, forward bytes were reconstructed from existing parts, and only successfully verified temporary copies were removed. Ten valid artifacts, historical markers, and 17 recovery parts remained untouched. Earlier PARTIAL statements below describe historical execution/publication steps, not current completeness.
 
 ### Long-term private research direction
 
@@ -61,6 +62,7 @@ Intentionally omitted. This repository is public, so confidential research direc
 - **Verification:** `python3 -m pytest -q tests` passed **519 tests** with 3 timestamp deprecation warnings on 2026-09-30. Focused EDA9/EDA10/period-map tests passed **89 tests**. Running `python3 -m pytest -q` from the repository root failed at collection with 6 import-file-mismatch errors because duplicate test filenames exist in the untracked review directories.
 - **Current verification:** adapter/builder/runner focused suite **102 passed**; canonical suite **621 passed**, 3 pre-existing timestamp warnings, on 2026-10-02. Tests are synthetic; the separately saved real-run report contains dataset measurements.
 - **Publication-resume verification:** safety suite **27 passed**; latest canonical suite **648 passed**, 3 pre-existing timestamp warnings. Drive artifacts and recovery parts separately verified by readback; a local-only recovery rehearsal passed, while final Drive publication still awaits Colab.
+- **Current verification (2026-10-03):** publication complete at `671d248`; training-first hub audit **26 focused tests**, canonical `python3 -m pytest -q tests` **677 passed**, 3 pre-existing timestamp warnings. Hub audit source/tests/docs are working-tree changes, not a new pushed commit. See Section 24 for executed dataset findings.
 - **State caveat:** the branch name remains `eda08` even though commits on it include EDA9 and EDA10. Treat commit identity, not the branch label, as authoritative.
 - **Tracked EDA1-output conflict:** `outputs/eda_01_intake/README_eda01_intake.txt` records a `/private/tmp` zero-byte test run, `T1_dataset_intake_ledger.csv` records a local 12.5 GB 2019-09-16 archive, and `T1B_master_archive_inventory.csv` marks all ten archives pending. These files came from different/stale runs and must not be combined as one current intake result.
 
@@ -365,7 +367,7 @@ The confidential long-term research direction is deliberately not named or descr
 | Item | Status | Evidence | Artifact/path | Last verified |
 |---|---|---|---|---|
 | Streaming/cache/EDA1–EDA10 code | COMPLETE | Canonical modules import and canonical suite passes | `src/eda/`, `tests/` | 2026-09-30 |
-| Canonical repository test suite | COMPLETE | 621 passed, 3 pre-existing deprecation warnings | `tests/` | 2026-10-02 |
+| Canonical repository test suite | COMPLETE | 677 passed, 3 pre-existing deprecation warnings | `tests/` | 2026-10-03 |
 | Root-level test discovery | BLOCKED | 6 collection errors from duplicate untracked review tests | Untracked `eda09_*_review/`, `eda10_*_review/` | 2026-09-30 |
 | Pilot period map | COMPLETE | Tracked CSV, provenance, tests | `data/period_maps/optc_pilot_period_map_v1.{csv,md}` | 2026-09-30 |
 | EDA9 authoritative run | PLANNED | Builder/tests exist; no run output found | Expected caller-provided output directory | 2026-09-30 |
@@ -380,7 +382,8 @@ The confidential long-term research direction is deliberately not named or descr
 | Historical behavior adapter | COMPLETE | All real events/relations reconcile; explicit-role source join and raw keys | `src/eda/adapt_structure_scoped_behavior_links.py`; saved real-run report | 2026-10-02 |
 | Thin Colab runner | COMPLETE | Historical audit/adapter/control/independent builds and measured comparison | `colab/run_sysclient0201_hybrid_graph.ipynb`; runtime not executed | 2026-10-02 |
 | Real-period hybrid connectivity experiment | COMPLETE | Both graphs executed locally, near-total component collapse measured | Ignored local run; saved real-run report | 2026-10-02 |
-| Drive graph publication | PARTIAL | Evaluation complete; training lacks two oversized edge files | Two Drive output folders with publication status | 2026-10-02 |
+| Drive graph publication | COMPLETE | Colab report verifies both periods 6/6 with exact hashes/counts | `publication_verification_5850b2b5d6254a36b8ed00df6a26f4b3.json` | 2026-10-02 |
+| Training-first hub-control audit | COMPLETE | 19 policies, frozen TRAIN masks/weights, both periods measured; no labels/models | `reports/sysclient0201_hub_control_audit_v1.json`; ignored detailed outputs | 2026-10-03 |
 | Non-PROCESS node initialization | BLOCKED | No implementation or documented decision | None | 2026-09-30 |
 | RGCN encoder and objective | PLANNED | No implementation/dependency found | None | 2026-09-30 |
 | RGCN training / PROCESS embeddings | PLANNED | No executed result or checkpoint found | None | 2026-09-30 |
@@ -393,7 +396,7 @@ The confidential long-term research direction is deliberately not named or descr
 
 ### CURRENT NEXT EXPERIMENT
 
-**After the first controlled run:** finish training-output Drive publication through a direct Colab/filesystem route without silently overwriting existing output folders, then review whether the common-module-driven component collapse warrants a separately authorized follow-up experiment. Keep all entities for this baseline. Do not start RGCN or One-Class SVM work.
+**After the training-first hub audit:** review the shortlist (MODULE family-frequency >1%, all-type family-frequency >5%, degree-IDF weighted full graph) and decide loss/exposure tolerances, frozen identity versus unseen-hub treatment, relation/reverse normalization, weight shape/floor, sampling/layer depth, and a training-only validation design. There is no automatically selected winner. Full graphs remain unchanged. Do not start RGCN or One-Class SVM work without a new explicit request.
 
 ## 21. Research safeguards
 
@@ -434,3 +437,34 @@ The confidential long-term research direction is deliberately not named or descr
 3. Check the Last Updated and Last Verified sections.
 4. Do not assume PLANNED work is complete.
 5. Continue from CURRENT NEXT EXPERIMENT.”
+
+## 24. Training-first hub-control audit (2026-10-03)
+
+`src/eda/audit_hybrid_graph_hubs.py` reads only PROCESS linkage/family/period columns, context identity/type columns, forward relations and available event counts from the completed graphs. It checks the four consumed source files per period against the immutable real-run manifest and rechecks hashes after execution. No labels/features are loaded or fitted; all PROCESS nodes, CREATE rows/weights and context identities remain unchanged. Only masks/profiles/weight candidates/JSON audits are written to a fresh, separate output directory; no filtered edge Parquets are generated. `scipy` supplies sparse connectivity/neighborhood operations, not model code.
+
+TRAIN has 4,815 CREATE families. Policies comprise FULL_SHARED; per-type degree and family percentiles 99/99.5/99.9; all-type and MODULE-only family-frequency bands 1/5/10%; a degree-ranked policy matching the 1%-family policy's exact per-type removal budget; MODULE-off and CREATE-only diagnostics; and degree/family/geometric inverse-frequency weighted full profiles. Percentile ties are retained. The numeric cutoffs and exact `(node_type, host_scope, canonical_key)` exclusion lists, plus candidate weights, are frozen before evaluation is opened. Evaluation applies those exact identity lists; unseen contexts remain retained with weight 1. The two type-off diagnostic rules also exclude unseen identities of those types. Evaluation metrics are reporting only, never used to select policies.
+
+Executed local results (source hashes match completed authentic Drive snapshots):
+
+- **Baselines:** TRAIN full 71,362/71,369 PROCESS (99.99019182%), 8 WCCs; CREATE-only 41,277 (57.83603525%), 4,815 WCCs. Evaluation full 8,253/8,376 (98.53151862%), 124 WCCs; CREATE-only 6,495 (77.54297994%), 838 WCCs. CREATE counts remain 66,554/7,538 for every variant.
+- **MODULEs are not necessary for collapse:** removing every MODULE context leaves TRAIN 70,075 PROCESS (98.18688786%) in its largest component, 1,289 WCCs, 3,527 bridged families, and max context degree 11,458. Evaluation remains 7,946 PROCESS (94.86628462%), 431 WCCs. MODULE LOAD supplies 71.17974847% of TRAIN compact context edges; FILE/DESTINATION sharing still sustains a giant component.
+- **Extreme per-type degree pruning is insufficient:** P99.9 removes just 60 TRAIN contexts, retains 83.38338028% of context edges, but leaves 71,351 PROCESS (99.97477897%) in the largest component and max degree 41,032. P99 still leaves 99.41991621% connected despite retaining only 45.67386504% of context edges.
+- **Family frequency and degree answer different questions:** same budget of 57 FILE +126 MODULE contexts, with zero DESTINATION removed: family-frequency >1% (more than 48.15 TRAIN families) yields 497 bridged families, 4,319 WCCs, 93.04459920% largest PROCESS share and 30.00186207% context-edge retention. Matched degree ranking yields 1,573 bridged families, 3,243 WCCs, 94.49761101% share and 27.90959233% retention. Degree controls the maximum more strongly (1,856 vs family policy 6,232); family frequency controls cross-family bridging more strongly. Neither metric dominates all objectives. TRAIN degree/family Spearman: FILE 0.73250532, MODULE 0.81015724, DESTINATION 0.35427308.
+- **MODULE-only >1% shortlist:** removes 126/2,844 MODULEs, retains every FILE/DESTINATION, 3,557 bridged families, 38.20518341% of context edges, and 98.23032409% largest PROCESS share. Sampled median 2-hop PROCESS count falls 64,225 →5,818; max context degree remains 11,458. Frozen evaluation largest share is 95.06924546%, with 37.99676972% context edges retained.
+- **All-type >5% shortlist:** excludes 138 TRAIN contexts (36 FILE, 102 MODULE, zero DESTINATION), retains 1,524 bridged families, 33.61662382% of context edges, and 94.50321568% largest PROCESS share. Sampled 2-hop PROCESS median/p95 are 515.5/10,458. Evaluation largest share is 92.46657116%, edge retention 37.47677419%. The stronger >1% policy excludes 183 contexts and lowers the sampled median to 7, but leaves only 497 bridged families; preserving useful context has not been established.
+- **Weighted full shortlist:** degree-IDF retains all nodes/edges; TRAIN's top 1% of contexts carry 84.64397403% of unique process-context incidence mass before weights and 56.64216605% afterward. Total weighted mass is 24.30983438% of raw mass. Family and geometric weighting give top-1% shares 59.61411290%/57.83981856%. These are static incidence proxies, not learned-message or detection measurements. Connectivity and raw 2-hop neighborhoods are unchanged, so weighting does not solve memory/sampling exposure by itself.
+
+Neighborhoods: 1-hop counts are exact over the full PROCESS universe. 2-hop counts are exact per seed for 64 deterministic SHA256 PROCESS-ID samples per period, identical across policies; reported sample quantiles are **not population quantiles**. Large WCCs alone do not establish noisy or harmful context, and these policies do not establish improved detection.
+
+Full outputs are ignored under `data/local_runs/sysclient0201_hub_control_v1_verified/`: per-context degree/family/event/rank profiles; relation-specific profiles/distributions; per-period masks; frozen TRAIN policy/weight tables; per-period candidate weights; top-10 remaining hubs; all variant metrics; CSV comparison; file hashes. Repository-safe summary: `reports/sysclient0201_hub_control_audit_v1.json`. Verified run took 27.22 seconds locally. Detailed audit source SHA256: `38fbf5c8b4bd7eba9df38622fb3d55c7ebe0783b59a3b3709aa605667d383ddf`. No source/EDA10 changes or model training occurred.
+
+Reproduce with a NEW separate output folder:
+
+```sh
+python3 -m src.eda.audit_hybrid_graph_hubs \
+  --train-dir data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1 \
+  --evaluation-dir data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1 \
+  --output-dir data/local_runs/sysclient0201_hub_control_repeat \
+  --real-run-manifest reports/sysclient0201_hybrid_graph_real_run_v1.json \
+  --two-hop-sample-size 64
+```
