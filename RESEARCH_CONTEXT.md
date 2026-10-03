@@ -21,7 +21,7 @@ This project studies large-scale endpoint telemetry from the corrected DARPA Ope
 
 ### Current objective
 
-Interpret the completed training-first hub-control audit and decide acceptable cross-family-context loss versus message-passing exposure before any model training. Publication is complete. Full provenance artifacts remain untouched; filtered policies exist only as context masks and audit results. Utility/noise and detection performance are not yet measured.
+Use the completed, frozen graph-policy layer to decide acceptable cross-family-context loss versus message-passing exposure before any model training. Publication and policy reconciliation are complete. Full provenance artifacts remain untouched; policies expose context masks and streamed edge weights, not filtered graph copies. Utility/noise and detection performance are not yet measured.
 
 Publication completed in Colab at `671d2487744612ee662bfb0994a99baf50f6c989`, using verified temporary reuse and an exclusive-create normal streamed copy with final hash/count readback (no atomic rename/link requirement). Both periods are 6/6 COMPLETE in `publication_verification_5850b2b5d6254a36b8ed00df6a26f4b3.json`, Drive file ID `1Ah-f_12t6zF3owcHq8vTK28J_mDkRhQd`; a readback copy is preserved in ignored local run storage. Bidirectional temporary bytes were reused, forward bytes were reconstructed from existing parts, and only successfully verified temporary copies were removed. Ten valid artifacts, historical markers, and 17 recovery parts remained untouched. Earlier PARTIAL statements below describe historical execution/publication steps, not current completeness.
 
@@ -62,7 +62,8 @@ Intentionally omitted. This repository is public, so confidential research direc
 - **Verification:** `python3 -m pytest -q tests` passed **519 tests** with 3 timestamp deprecation warnings on 2026-09-30. Focused EDA9/EDA10/period-map tests passed **89 tests**. Running `python3 -m pytest -q` from the repository root failed at collection with 6 import-file-mismatch errors because duplicate test filenames exist in the untracked review directories.
 - **Current verification:** adapter/builder/runner focused suite **102 passed**; canonical suite **621 passed**, 3 pre-existing timestamp warnings, on 2026-10-02. Tests are synthetic; the separately saved real-run report contains dataset measurements.
 - **Publication-resume verification:** safety suite **27 passed**; latest canonical suite **648 passed**, 3 pre-existing timestamp warnings. Drive artifacts and recovery parts separately verified by readback; a local-only recovery rehearsal passed, while final Drive publication still awaits Colab.
-- **Current verification (2026-10-03):** publication complete at `671d248`; training-first hub audit **26 focused tests**, canonical `python3 -m pytest -q tests` **677 passed**, 3 pre-existing timestamp warnings. Hub audit source/tests/docs are working-tree changes, not a new pushed commit. See Section 24 for executed dataset findings.
+- **Hub audit verification (2026-10-03):** publication complete at `671d248`; training-first hub audit **26 focused tests**, canonical `python3 -m pytest -q tests` **677 passed**, 3 pre-existing timestamp warnings. Bugbot found no actionable issues; audit committed as `7aee19f327e9c5472f3e4c364b20e4296e49d371`. See Sections 24–25 for executed findings and frozen policy reconciliation. No push was requested for this milestone.
+- **Current policy-layer verification (2026-10-03):** **40 new policy tests** / **66 focused policy+hub tests** passed; canonical `python3 -m pytest -q tests` **717 passed**, 3 pre-existing timestamp warnings. All four policies reconcile both periods against the completed hub audit, including actual streamed bidirectional counts/events/weights. All 12 source files remain byte-identical.
 - **State caveat:** the branch name remains `eda08` even though commits on it include EDA9 and EDA10. Treat commit identity, not the branch label, as authoritative.
 - **Tracked EDA1-output conflict:** `outputs/eda_01_intake/README_eda01_intake.txt` records a `/private/tmp` zero-byte test run, `T1_dataset_intake_ledger.csv` records a local 12.5 GB 2019-09-16 archive, and `T1B_master_archive_inventory.csv` marks all ten archives pending. These files came from different/stale runs and must not be combined as one current intake result.
 
@@ -367,7 +368,7 @@ The confidential long-term research direction is deliberately not named or descr
 | Item | Status | Evidence | Artifact/path | Last verified |
 |---|---|---|---|---|
 | Streaming/cache/EDA1–EDA10 code | COMPLETE | Canonical modules import and canonical suite passes | `src/eda/`, `tests/` | 2026-09-30 |
-| Canonical repository test suite | COMPLETE | 677 passed, 3 pre-existing deprecation warnings | `tests/` | 2026-10-03 |
+| Canonical repository test suite | COMPLETE | 717 passed, 3 pre-existing deprecation warnings | `tests/` | 2026-10-03 |
 | Root-level test discovery | BLOCKED | 6 collection errors from duplicate untracked review tests | Untracked `eda09_*_review/`, `eda10_*_review/` | 2026-09-30 |
 | Pilot period map | COMPLETE | Tracked CSV, provenance, tests | `data/period_maps/optc_pilot_period_map_v1.{csv,md}` | 2026-09-30 |
 | EDA9 authoritative run | PLANNED | Builder/tests exist; no run output found | Expected caller-provided output directory | 2026-09-30 |
@@ -384,6 +385,7 @@ The confidential long-term research direction is deliberately not named or descr
 | Real-period hybrid connectivity experiment | COMPLETE | Both graphs executed locally, near-total component collapse measured | Ignored local run; saved real-run report | 2026-10-02 |
 | Drive graph publication | COMPLETE | Colab report verifies both periods 6/6 with exact hashes/counts | `publication_verification_5850b2b5d6254a36b8ed00df6a26f4b3.json` | 2026-10-02 |
 | Training-first hub-control audit | COMPLETE | 19 policies, frozen TRAIN masks/weights, both periods measured; no labels/models | `reports/sysclient0201_hub_control_audit_v1.json`; ignored detailed outputs | 2026-10-03 |
+| Reusable frozen graph-policy layer | COMPLETE | Four policies; TRAIN-only serialized statistics; exact prior-audit and bidirectional parity | `src/graph/`; `reports/sysclient0201_graph_policy_reconciliation_v1.json` | 2026-10-03 |
 | Non-PROCESS node initialization | BLOCKED | No implementation or documented decision | None | 2026-09-30 |
 | RGCN encoder and objective | PLANNED | No implementation/dependency found | None | 2026-09-30 |
 | RGCN training / PROCESS embeddings | PLANNED | No executed result or checkpoint found | None | 2026-09-30 |
@@ -396,7 +398,7 @@ The confidential long-term research direction is deliberately not named or descr
 
 ### CURRENT NEXT EXPERIMENT
 
-**After the training-first hub audit:** review the shortlist (MODULE family-frequency >1%, all-type family-frequency >5%, degree-IDF weighted full graph) and decide loss/exposure tolerances, frozen identity versus unseen-hub treatment, relation/reverse normalization, weight shape/floor, sampling/layer depth, and a training-only validation design. There is no automatically selected winner. Full graphs remain unchanged. Do not start RGCN or One-Class SVM work without a new explicit request.
+**After the frozen policy layer:** choose which of the four reproducible views to use in a future training experiment and decide loss/exposure tolerances, unseen-hub treatment, relation/reverse normalization, weight shape/floor, non-PROCESS initialization, sampling/layer depth, and a training-only validation design. There is no automatically selected winner. Full graphs remain unchanged. Do not start RGCN or One-Class SVM work without a new explicit request.
 
 ## 21. Research safeguards
 
@@ -468,3 +470,52 @@ python3 -m src.eda.audit_hybrid_graph_hubs \
   --real-run-manifest reports/sysclient0201_hybrid_graph_real_run_v1.json \
   --two-hop-sample-size 64
 ```
+
+## 25. Reusable frozen graph policies (2026-10-03)
+
+`src/graph/graph_policy.py` implements a versioned immutable TRAIN bundle and a non-destructive period-specific loader view. `src/graph/audit_frozen_policies.py` validates it against the completed 19-policy audit and streams actual bidirectional artifacts for parity checks. There is no model code. The existing EDA10, CREATE builder, publication mechanism and reviewed hub-audit source are unchanged.
+
+Exact v1 policy definitions (TRAIN = 71,369 PROCESS /4,815 CREATE families):
+
+- `FULL_SHARED`: all PROCESS, context nodes and edges retained; weight 1.
+- `MODULE_FAMILY_FREQ_1PCT`: exclude known TRAIN MODULE identities connected to more than 48.15 TRAIN families (integer count >=49). FILE and DESTINATION untouched. Strict integer comparison `family_count * 100 > TRAIN_family_count`; ties retained.
+- `ALL_TYPE_FAMILY_FREQ_5PCT`: exclude known TRAIN FILE/MODULE/DESTINATION identities connected to more than 240.75 TRAIN families (integer count >=241). Strict integer comparison `family_count * 100 > 5 * TRAIN_family_count`; ties retained.
+- `DEGREE_WEIGHTED_FULL`: all raw nodes/edges retained; context edge weight `log((71369+1)/(TRAIN_unique_process_degree+1))/log(71369+1)`. This is the selected degree candidate from the audit, not event counts or a learned weight. Every CREATE edge has weight 1. Zero is possible for a universal TRAIN context and does not change `keep_edge` or raw topology.
+
+The serialized bundle consists of `policy_bundle.json` and `context_statistics.parquet`: names/versions, populations, per-type thresholds, exact formulas/parameters, source hashes, TRAIN PROCESS/family signature, CREATE hash, and all 58,744 known TRAIN context identities with unique PROCESS degree, distinct-family count and degree weight. The immutable fingerprint is `0c93b04f8c8b6dd19a18f485186c01272232606154057c31a9e2568bfdc0029d`. Statistics file SHA256 `0b9dec7cf7d842529cc0066420120c23702fa8cebf0f2d2a15a0e6ac50c0bf51`; metadata SHA256 `eef12814a2e6a57769bdaf407d5d9affcd5f08d9cfa19a0502a9864dbce6842b`. Modified schema/definitions/counts/fingerprint/statistics/weights fail closed.
+
+Evaluation must load the serialized bundle; a freshly fitted in-memory bundle is refused for evaluation. Transfer uses exact `(node_type, host_scope, canonical_key)` identities and only their TRAIN statistics, never evaluation degree/family frequency. Unseen identities remain retained with weight 1 for every policy, without a malicious/suspicious label. There are 4,546 unseen contexts in this evaluation. No labels or PROCESS feature columns enter policy fitting/application. TRAIN source verification binds file names, sizes and hashes rather than machine-specific paths, allowing the same frozen bundle to move from local snapshots to Colab without refitting.
+
+Loader example (paths supplied by caller; `manifest` is the completed-run JSON):
+
+```python
+from src.eda.audit_hybrid_graph_hubs import load_graph
+from src.graph.graph_policy import FrozenPolicies
+
+bundle = FrozenPolicies.load(frozen_policy_folder)
+graph = load_graph(evaluation_full_graph_folder, "evaluation", manifest)
+view = bundle.view(graph, "MODULE_FAMILY_FREQ_1PCT")
+context_decisions = view.contexts
+assert view.process_keep.all()  # Original PROCESS table, including isolated nodes.
+for batch in view.iter_edge_batches(bidirectional_edge_path):
+    retained = batch.loc[batch.keep_edge]
+    # Later loader consumes source_id, target_id, relation_id, edge_weight,
+    # policy_name/version/fingerprint. No training occurs here.
+```
+
+All 20 relation IDs and endpoint types are validated. Context-side masks/weights are identical on forward/reverse edges; `mirror_forward` uses the original builder's deterministic REV__ ID formula. Raw allowlisted edge fields are unchanged. Excluded edges carry `keep_edge=False`, weight 0; retained unweighted edges and every CREATE edge carry weight 1. The caller must honor the mask independently of weights. Policy views are for validated immutable source graphs, not a mechanism for adding edges or changing context identity.
+
+Real local validation reconciles all existing metric fields for the four views against their old audit names (`FULL_SHARED`, `MODULE_FAMILY_FREQ_GT_1PCT`, `FAMILY_FREQ_GT_5PCT`, `WEIGHTED_FULL_DEGREE`). TRAIN/evaluation retained forward counts: full and weighted 2,746,371 /312,156; MODULE rule 1,090,383 /123,283; all-type rule 967,418 /121,699. Actual bidirectional retained counts are exactly twice those counts; counts, event totals and weight sums reconcile per forward/reverse relation. PROCESS counts remain 71,369 /8,376 and CREATE rows 66,554 /7,538. Largest PROCESS shares, bridged families, degrees, neighborhood samples and weighted exposure match Section 24, with no evaluation-driven retuning. Every one of the 12 original graph files matches its completed-run size/SHA256 before and after validation, including PROCESS feature bytes and both edge files. No EDA10 or ground-truth writes occur; this is not a comprehensive independent historical hash audit of unrelated external artifacts.
+
+Authoritative serialized bundle and compact decision Parquets are ignored under `data/local_runs/sysclient0201_graph_policy_v1_final/`; earlier outputs `sysclient0201_graph_policy_v1/` and `sysclient0201_graph_policy_v1_verified/` were preserved. Checked-in metadata-only validation report: `reports/sysclient0201_graph_policy_reconciliation_v1.json`. There are no duplicate filtered edge Parquets. Reproduce into a NEW separate directory:
+
+```sh
+python3 -m src.graph.audit_frozen_policies \
+  --train-dir data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1 \
+  --evaluation-dir data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1 \
+  --output-dir data/local_runs/sysclient0201_graph_policy_repeat \
+  --real-run-manifest reports/sysclient0201_hybrid_graph_real_run_v1.json \
+  --previous-hub-audit reports/sysclient0201_hub_control_audit_v1.json
+```
+
+Before RGCN training, policy selection remains a research decision. Resolve normalization/aggregation across relations and reverse edges, application of event counts, zero-weight/floor treatment, non-PROCESS features, sampling/depth, acceptable evidence loss and training-only validation. The v1 unseen neutral rule can leave previously unseen evaluation hubs intact; do not change it based on these evaluation results. Weighting preserves evidence but leaves giant components and raw computational exposure unchanged. No detection improvement is claimed.

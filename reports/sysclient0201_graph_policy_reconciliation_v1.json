@@ -1,0 +1,2115 @@
+{
+  "all_12_source_files_byte_identical": true,
+  "all_four_policies_reconciled_both_periods": true,
+  "detailed_outputs_directory": "data/local_runs/sysclient0201_graph_policy_v1_final",
+  "evaluation_ground_truth_read": false,
+  "frozen_policy_fingerprint": "0c93b04f8c8b6dd19a18f485186c01272232606154057c31a9e2568bfdc0029d",
+  "frozen_policy_metadata": {
+    "derived_from_period": "verified_benign",
+    "evaluation_contract": "Exact TRAIN identities/statistics; no evaluation refitting or labels",
+    "identity_columns": [
+      "node_type",
+      "host_scope",
+      "canonical_key"
+    ],
+    "policies": {
+      "ALL_TYPE_FAMILY_FREQ_5PCT": {
+        "create_edge_rule": "retain, weight 1 in both directions",
+        "family_frequency_percent": 5,
+        "name": "ALL_TYPE_FAMILY_FREQ_5PCT",
+        "per_node_type_thresholds": {
+          "DESTINATION": 240.75,
+          "FILE": 240.75,
+          "MODULE": 240.75
+        },
+        "policy_version": "hybrid_context_policy_v1",
+        "statistic": "training_distinct_family_count",
+        "threshold_definition": "TRAIN family_count * 100 > TRAIN family_population * percent; ties retained",
+        "weight_formula": "1 for retained, 0 for excluded",
+        "weight_parameters": {}
+      },
+      "DEGREE_WEIGHTED_FULL": {
+        "create_edge_rule": "retain, weight 1 in both directions",
+        "family_frequency_percent": null,
+        "name": "DEGREE_WEIGHTED_FULL",
+        "per_node_type_thresholds": {
+          "DESTINATION": null,
+          "FILE": null,
+          "MODULE": null
+        },
+        "policy_version": "hybrid_context_policy_v1",
+        "statistic": "training_process_degree",
+        "threshold_definition": null,
+        "weight_formula": "log((N_process_train + 1)/(degree_train + 1))/log(N_process_train + 1)",
+        "weight_parameters": {
+          "N_process_train": 71369
+        }
+      },
+      "FULL_SHARED": {
+        "create_edge_rule": "retain, weight 1 in both directions",
+        "family_frequency_percent": null,
+        "name": "FULL_SHARED",
+        "per_node_type_thresholds": {
+          "DESTINATION": null,
+          "FILE": null,
+          "MODULE": null
+        },
+        "policy_version": "hybrid_context_policy_v1",
+        "statistic": null,
+        "threshold_definition": null,
+        "weight_formula": "1 for retained, 0 for excluded",
+        "weight_parameters": {}
+      },
+      "MODULE_FAMILY_FREQ_1PCT": {
+        "create_edge_rule": "retain, weight 1 in both directions",
+        "family_frequency_percent": 1,
+        "name": "MODULE_FAMILY_FREQ_1PCT",
+        "per_node_type_thresholds": {
+          "DESTINATION": null,
+          "FILE": null,
+          "MODULE": 48.15
+        },
+        "policy_version": "hybrid_context_policy_v1",
+        "statistic": "training_distinct_family_count",
+        "threshold_definition": "TRAIN family_count * 100 > TRAIN family_population * percent; ties retained",
+        "weight_formula": "1 for retained, 0 for excluded",
+        "weight_parameters": {}
+      }
+    },
+    "policy_version": "hybrid_context_policy_v1",
+    "raw_topology_contract": "Full evidence remains unchanged; keep_edge is independent of edge_weight",
+    "schema_version": "frozen_context_policy_bundle_v1",
+    "training_context_count": 58744,
+    "training_context_counts": {
+      "DESTINATION": 142,
+      "FILE": 55758,
+      "MODULE": 2844
+    },
+    "training_create_edge_count": 66554,
+    "training_create_sha256": "74c1152bf8b41c565d926690716d256806cabdd8754d29df45a9cf87d0a99190",
+    "training_family_count": 4815,
+    "training_forward_edge_count": 2746371,
+    "training_process_count": 71369,
+    "training_process_signature": "ef800ea49202649d730e50675ad74bc78ac39d798569fd727d891c5b07d913b3",
+    "training_source_inventory": {
+      "graph_connectivity_audit.json": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/graph_connectivity_audit.json",
+        "sha256": "4102d179144e84005cfe01c7291c5f836294662524a181bd65b708f2a8c2d72e",
+        "size_bytes": 21291
+      },
+      "hetero_entity_nodes.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_entity_nodes.parquet",
+        "sha256": "365f0732c43af88e02043b3a48691372e16606a7816c9a49ddfcb175124ef0b6",
+        "size_bytes": 5229862
+      },
+      "hetero_graph_edges_forward.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_graph_edges_forward.parquet",
+        "sha256": "8c59d3bac2511d78abd7052455eecafccbe434ea922f2cb853effb604c7e9d88",
+        "size_bytes": 355212816
+      },
+      "hetero_process_nodes.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_process_nodes.parquet",
+        "sha256": "5cefa50dd17cf359142ec83f672e725c036a76af85b9c2afe70bfa55b685c697",
+        "size_bytes": 10260680
+      }
+    },
+    "unseen_entity_rule": {
+      "edge_weight": 1,
+      "keep_context": true
+    }
+  },
+  "git_head": "7aee19f327e9c5472f3e4c364b20e4296e49d371",
+  "graph_files_written": false,
+  "model_training_performed": false,
+  "notes": [
+    "Validation used local completed authentic snapshots; no new Drive/Colab run.",
+    "Weighted incidence is a static proxy, not detection performance.",
+    "PROCESS and CREATE retained; zero weight does not delete raw topology."
+  ],
+  "output_inventory": {
+    "evaluation_context_decisions.parquet": {
+      "sha256": "7dbf05eeca6d5c2210932e66d09c88653a656b6b9ab3f05484b573a8f5480ed5",
+      "size_bytes": 1412972
+    },
+    "frozen_policy/context_statistics.parquet": {
+      "sha256": "0b9dec7cf7d842529cc0066420120c23702fa8cebf0f2d2a15a0e6ac50c0bf51",
+      "size_bytes": 901901
+    },
+    "frozen_policy/policy_bundle.json": {
+      "sha256": "eef12814a2e6a57769bdaf407d5d9affcd5f08d9cfa19a0502a9864dbce6842b",
+      "size_bytes": 5227
+    },
+    "verified_benign_context_decisions.parquet": {
+      "sha256": "aa4a00e9386a7772ba93b9addd3b6f4d919de0b695175b688a472300d38edcb5",
+      "size_bytes": 5296988
+    }
+  },
+  "periods": {
+    "evaluation": {
+      "policies": {
+        "ALL_TYPE_FAMILY_FREQ_5PCT": {
+          "bidirectional_stream_verification": {
+            "all_20_relation_counts_events_weights_reconciled": true,
+            "create_rows_retained_both_directions": 15076,
+            "forward_rows": 312156,
+            "per_relation": {
+              "PROCESS_CREATE_PROCESS": {
+                "retained_events": 7538,
+                "retained_rows": 7538,
+                "rows": 7538,
+                "weight_sum": 7538
+              },
+              "PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 886594,
+                "retained_rows": 351,
+                "rows": 351,
+                "weight_sum": 351
+              },
+              "PROCESS_DESTINATION_START": {
+                "retained_events": 2250826,
+                "retained_rows": 545,
+                "rows": 545,
+                "weight_sum": 545
+              },
+              "PROCESS_FILE_CREATE": {
+                "retained_events": 46477,
+                "retained_rows": 3818,
+                "rows": 3818,
+                "weight_sum": 3818
+              },
+              "PROCESS_FILE_DELETE": {
+                "retained_events": 10814,
+                "retained_rows": 2953,
+                "rows": 2953,
+                "weight_sum": 2953
+              },
+              "PROCESS_FILE_MODIFY": {
+                "retained_events": 190072,
+                "retained_rows": 7155,
+                "rows": 7202,
+                "weight_sum": 7155
+              },
+              "PROCESS_FILE_READ": {
+                "retained_events": 131347,
+                "retained_rows": 48443,
+                "rows": 61860,
+                "weight_sum": 48443
+              },
+              "PROCESS_FILE_RENAME": {
+                "retained_events": 19523,
+                "retained_rows": 909,
+                "rows": 909,
+                "weight_sum": 909
+              },
+              "PROCESS_FILE_WRITE": {
+                "retained_events": 115413,
+                "retained_rows": 5295,
+                "rows": 5295,
+                "weight_sum": 5295
+              },
+              "PROCESS_MODULE_LOAD": {
+                "retained_events": 48775,
+                "retained_rows": 44692,
+                "rows": 221685,
+                "weight_sum": 44692
+              },
+              "REV__PROCESS_CREATE_PROCESS": {
+                "retained_events": 7538,
+                "retained_rows": 7538,
+                "rows": 7538,
+                "weight_sum": 7538
+              },
+              "REV__PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 886594,
+                "retained_rows": 351,
+                "rows": 351,
+                "weight_sum": 351
+              },
+              "REV__PROCESS_DESTINATION_START": {
+                "retained_events": 2250826,
+                "retained_rows": 545,
+                "rows": 545,
+                "weight_sum": 545
+              },
+              "REV__PROCESS_FILE_CREATE": {
+                "retained_events": 46477,
+                "retained_rows": 3818,
+                "rows": 3818,
+                "weight_sum": 3818
+              },
+              "REV__PROCESS_FILE_DELETE": {
+                "retained_events": 10814,
+                "retained_rows": 2953,
+                "rows": 2953,
+                "weight_sum": 2953
+              },
+              "REV__PROCESS_FILE_MODIFY": {
+                "retained_events": 190072,
+                "retained_rows": 7155,
+                "rows": 7202,
+                "weight_sum": 7155
+              },
+              "REV__PROCESS_FILE_READ": {
+                "retained_events": 131347,
+                "retained_rows": 48443,
+                "rows": 61860,
+                "weight_sum": 48443
+              },
+              "REV__PROCESS_FILE_RENAME": {
+                "retained_events": 19523,
+                "retained_rows": 909,
+                "rows": 909,
+                "weight_sum": 909
+              },
+              "REV__PROCESS_FILE_WRITE": {
+                "retained_events": 115413,
+                "retained_rows": 5295,
+                "rows": 5295,
+                "weight_sum": 5295
+              },
+              "REV__PROCESS_MODULE_LOAD": {
+                "retained_events": 48775,
+                "retained_rows": 44692,
+                "rows": 221685,
+                "weight_sum": 44692
+              }
+            },
+            "retained_bidirectional_rows": 243398,
+            "retained_forward_rows": 121699
+          },
+          "metrics": {
+            "context_degree": {
+              "count": 14881,
+              "maximum": 1858,
+              "mean": 7.038975875277199,
+              "median": 2,
+              "minimum": 1,
+              "p90": 7,
+              "p95": 21,
+              "p99": 99,
+              "p99_5": 149,
+              "p99_9": 378
+            },
+            "create_edge_count": 7538,
+            "create_families_bridged_by_shared_context": 268,
+            "create_topology_sha256": "91de9146292a8095797d7de6c456c92f405d4e01e89d1c23c46ecff39c041b0e",
+            "create_topology_unchanged": true,
+            "largest_component_process_count": 7745,
+            "largest_component_process_percent": 92.4665711556829,
+            "largest_process_component_count": 7745,
+            "neighborhoods": {
+              "definition": "Unique nodes at undirected distance <= radius, excluding self, including CREATE; not relation/event multiplicity",
+              "one_hop_all_processes": {
+                "count": 8376,
+                "maximum": 4425,
+                "mean": 14.305515759312321,
+                "median": 3,
+                "minimum": 0,
+                "p90": 17,
+                "p95": 42,
+                "p99": 207,
+                "p99_5": 266.375,
+                "p99_9": 651.6250000000018
+              },
+              "two_hop_method": "Deterministic SHA256 process_id sample, exact per seed; sampled quantiles are NOT population quantiles",
+              "two_hop_sample_size": 64,
+              "two_hop_sampled_all_node_count": {
+                "count": 64,
+                "maximum": 3202,
+                "mean": 1412.40625,
+                "median": 2032.5,
+                "minimum": 1,
+                "p90": 2944,
+                "p95": 2944,
+                "p99": 3135.22,
+                "p99_5": 3168.61,
+                "p99_9": 3195.3220000000006
+              },
+              "two_hop_sampled_process_count": {
+                "count": 64,
+                "maximum": 2607,
+                "mean": 820.25,
+                "median": 509,
+                "minimum": 1,
+                "p90": 2408,
+                "p95": 2408,
+                "p99": 2481.6299999999997,
+                "p99_5": 2544.3150000000005,
+                "p99_9": 2594.463000000001
+              }
+            },
+            "process_count": 8376,
+            "relation_edge_counts": {
+              "PROCESS_CREATE_PROCESS": 7538,
+              "PROCESS_DESTINATION_MESSAGE": 351,
+              "PROCESS_DESTINATION_START": 545,
+              "PROCESS_FILE_CREATE": 3818,
+              "PROCESS_FILE_DELETE": 2953,
+              "PROCESS_FILE_MODIFY": 7155,
+              "PROCESS_FILE_READ": 48443,
+              "PROCESS_FILE_RENAME": 909,
+              "PROCESS_FILE_WRITE": 5295,
+              "PROCESS_MODULE_LOAD": 44692
+            },
+            "retained_context_counts": {
+              "DESTINATION": 357,
+              "FILE": 13213,
+              "MODULE": 1311
+            },
+            "retained_context_edge_count": 114161,
+            "retained_context_edges_percent": 37.476774189312515,
+            "retained_context_event_count": 3699841,
+            "retained_context_nodes_percent_by_type": {
+              "DESTINATION": 100,
+              "FILE": 99.72828137972677,
+              "MODULE": 92.78131634819533
+            },
+            "retained_cross_family_incidence_count": 14109,
+            "retained_distinct_family_context_incidence_count": 23803,
+            "retained_forward_edge_count": 121699,
+            "shared_context_count": 5187,
+            "weakly_connected_component_count": 571
+          },
+          "previous_audit_policy": "FAMILY_FREQ_GT_5PCT",
+          "reconciled": true
+        },
+        "DEGREE_WEIGHTED_FULL": {
+          "bidirectional_stream_verification": {
+            "all_20_relation_counts_events_weights_reconciled": true,
+            "create_rows_retained_both_directions": 15076,
+            "forward_rows": 312156,
+            "per_relation": {
+              "PROCESS_CREATE_PROCESS": {
+                "retained_events": 7538,
+                "retained_rows": 7538,
+                "rows": 7538,
+                "weight_sum": 7538
+              },
+              "PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 886594,
+                "retained_rows": 351,
+                "rows": 351,
+                "weight_sum": 208.74108721229018
+              },
+              "PROCESS_DESTINATION_START": {
+                "retained_events": 2250826,
+                "retained_rows": 545,
+                "rows": 545,
+                "weight_sum": 439.54523821862216
+              },
+              "PROCESS_FILE_CREATE": {
+                "retained_events": 46477,
+                "retained_rows": 3818,
+                "rows": 3818,
+                "weight_sum": 3611.9907819002506
+              },
+              "PROCESS_FILE_DELETE": {
+                "retained_events": 10814,
+                "retained_rows": 2953,
+                "rows": 2953,
+                "weight_sum": 2788.7087959562155
+              },
+              "PROCESS_FILE_MODIFY": {
+                "retained_events": 191166,
+                "retained_rows": 7202,
+                "rows": 7202,
+                "weight_sum": 5958.681916719697
+              },
+              "PROCESS_FILE_READ": {
+                "retained_events": 145254,
+                "retained_rows": 61860,
+                "rows": 61860,
+                "weight_sum": 29560.151790045416
+              },
+              "PROCESS_FILE_RENAME": {
+                "retained_events": 19523,
+                "retained_rows": 909,
+                "rows": 909,
+                "weight_sum": 878.3016882859748
+              },
+              "PROCESS_FILE_WRITE": {
+                "retained_events": 115413,
+                "retained_rows": 5295,
+                "rows": 5295,
+                "weight_sum": 4282.4929166330285
+              },
+              "PROCESS_MODULE_LOAD": {
+                "retained_events": 236036,
+                "retained_rows": 221685,
+                "rows": 221685,
+                "weight_sum": 36373.47286671805
+              },
+              "REV__PROCESS_CREATE_PROCESS": {
+                "retained_events": 7538,
+                "retained_rows": 7538,
+                "rows": 7538,
+                "weight_sum": 7538
+              },
+              "REV__PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 886594,
+                "retained_rows": 351,
+                "rows": 351,
+                "weight_sum": 208.74108721229018
+              },
+              "REV__PROCESS_DESTINATION_START": {
+                "retained_events": 2250826,
+                "retained_rows": 545,
+                "rows": 545,
+                "weight_sum": 439.54523821862216
+              },
+              "REV__PROCESS_FILE_CREATE": {
+                "retained_events": 46477,
+                "retained_rows": 3818,
+                "rows": 3818,
+                "weight_sum": 3611.9907819002506
+              },
+              "REV__PROCESS_FILE_DELETE": {
+                "retained_events": 10814,
+                "retained_rows": 2953,
+                "rows": 2953,
+                "weight_sum": 2788.7087959562155
+              },
+              "REV__PROCESS_FILE_MODIFY": {
+                "retained_events": 191166,
+                "retained_rows": 7202,
+                "rows": 7202,
+                "weight_sum": 5958.681916719697
+              },
+              "REV__PROCESS_FILE_READ": {
+                "retained_events": 145254,
+                "retained_rows": 61860,
+                "rows": 61860,
+                "weight_sum": 29560.151790045416
+              },
+              "REV__PROCESS_FILE_RENAME": {
+                "retained_events": 19523,
+                "retained_rows": 909,
+                "rows": 909,
+                "weight_sum": 878.3016882859748
+              },
+              "REV__PROCESS_FILE_WRITE": {
+                "retained_events": 115413,
+                "retained_rows": 5295,
+                "rows": 5295,
+                "weight_sum": 4282.4929166330285
+              },
+              "REV__PROCESS_MODULE_LOAD": {
+                "retained_events": 236036,
+                "retained_rows": 221685,
+                "rows": 221685,
+                "weight_sum": 36373.47286671805
+              }
+            },
+            "retained_bidirectional_rows": 624312,
+            "retained_forward_rows": 312156
+          },
+          "metrics": {
+            "context_degree": {
+              "count": 15019,
+              "maximum": 7273,
+              "mean": 19.653771888940675,
+              "median": 2,
+              "minimum": 1,
+              "p90": 8,
+              "p95": 30,
+              "p99": 258,
+              "p99_5": 750.6199999999881,
+              "p99_9": 3719.9720000007983
+            },
+            "create_edge_count": 7538,
+            "create_families_bridged_by_shared_context": 715,
+            "create_topology_sha256": "91de9146292a8095797d7de6c456c92f405d4e01e89d1c23c46ecff39c041b0e",
+            "create_topology_unchanged": true,
+            "largest_component_process_count": 8253,
+            "largest_component_process_percent": 98.53151862464183,
+            "largest_process_component_count": 8253,
+            "neighborhoods": {
+              "definition": "Unique nodes at undirected distance <= radius, excluding self, including CREATE; not relation/event multiplicity",
+              "one_hop_all_processes": {
+                "count": 8376,
+                "maximum": 4452,
+                "mean": 37.04106972301815,
+                "median": 28,
+                "minimum": 0,
+                "p90": 57,
+                "p95": 77,
+                "p99": 248.25,
+                "p99_5": 289.25,
+                "p99_9": 693.5000000000655
+              },
+              "two_hop_method": "Deterministic SHA256 process_id sample, exact per seed; sampled quantiles are NOT population quantiles",
+              "two_hop_sample_size": 64,
+              "two_hop_sampled_all_node_count": {
+                "count": 64,
+                "maximum": 9505,
+                "mean": 7163.453125,
+                "median": 7484,
+                "minimum": 19,
+                "p90": 9210,
+                "p95": 9235.9,
+                "p99": 9367.029999999999,
+                "p99_5": 9436.015000000001,
+                "p99_9": 9491.203000000001
+              },
+              "two_hop_sampled_process_count": {
+                "count": 64,
+                "maximum": 7640,
+                "mean": 6529.078125,
+                "median": 7331,
+                "minimum": 1,
+                "p90": 7640,
+                "p95": 7640,
+                "p99": 7640,
+                "p99_5": 7640,
+                "p99_9": 7640
+              }
+            },
+            "process_count": 8376,
+            "relation_edge_counts": {
+              "PROCESS_CREATE_PROCESS": 7538,
+              "PROCESS_DESTINATION_MESSAGE": 351,
+              "PROCESS_DESTINATION_START": 545,
+              "PROCESS_FILE_CREATE": 3818,
+              "PROCESS_FILE_DELETE": 2953,
+              "PROCESS_FILE_MODIFY": 7202,
+              "PROCESS_FILE_READ": 61860,
+              "PROCESS_FILE_RENAME": 909,
+              "PROCESS_FILE_WRITE": 5295,
+              "PROCESS_MODULE_LOAD": 221685
+            },
+            "retained_context_counts": {
+              "DESTINATION": 357,
+              "FILE": 13249,
+              "MODULE": 1413
+            },
+            "retained_context_edge_count": 304618,
+            "retained_context_edges_percent": 100,
+            "retained_context_event_count": 3902103,
+            "retained_context_nodes_percent_by_type": {
+              "DESTINATION": 100,
+              "FILE": 100,
+              "MODULE": 100
+            },
+            "retained_cross_family_incidence_count": 36246,
+            "retained_distinct_family_context_incidence_count": 45940,
+            "retained_forward_edge_count": 312156,
+            "shared_context_count": 5325,
+            "weakly_connected_component_count": 124,
+            "weight_exposure": {
+              "interpretation": "Static weighted incidence proxy, NOT learned messages or effective RGCN neighborhood; CREATE weights stay 1; weighted topology equals FULL_SHARED",
+              "raw_top_one_percent_context_incidence_mass_share_percent": 70.18869842130226,
+              "seen_in_training_context_count": 10473,
+              "training_derived_weight_kind": "degree",
+              "unseen_context_count": 4546,
+              "weighted_context_incidence_mass_percent_of_full": 25.724597275119184,
+              "weighted_same_top_one_percent_incidence_mass_share_percent": 34.7699757328723,
+              "weighted_unique_context_neighbor_exposure_per_process": {
+                "count": 8376,
+                "maximum": 3918.364760444521,
+                "mean": 9.065647831506293,
+                "median": 3.3576011420856995,
+                "minimum": 0,
+                "p90": 10.48348629012419,
+                "p95": 21.190727608753843,
+                "p99": 107.3627115193225,
+                "p99_5": 155.27500532581783,
+                "p99_9": 453.59062735538384
+              },
+              "weights": {
+                "count": 15019,
+                "maximum": 1,
+                "mean": 0.8271429114773362,
+                "median": 0.8759538386307779,
+                "minimum": 0.010053977352236149,
+                "p90": 1,
+                "p95": 1,
+                "p99": 1,
+                "p99_5": 1,
+                "p99_9": 1
+              }
+            }
+          },
+          "previous_audit_policy": "WEIGHTED_FULL_DEGREE",
+          "reconciled": true
+        },
+        "FULL_SHARED": {
+          "bidirectional_stream_verification": {
+            "all_20_relation_counts_events_weights_reconciled": true,
+            "create_rows_retained_both_directions": 15076,
+            "forward_rows": 312156,
+            "per_relation": {
+              "PROCESS_CREATE_PROCESS": {
+                "retained_events": 7538,
+                "retained_rows": 7538,
+                "rows": 7538,
+                "weight_sum": 7538
+              },
+              "PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 886594,
+                "retained_rows": 351,
+                "rows": 351,
+                "weight_sum": 351
+              },
+              "PROCESS_DESTINATION_START": {
+                "retained_events": 2250826,
+                "retained_rows": 545,
+                "rows": 545,
+                "weight_sum": 545
+              },
+              "PROCESS_FILE_CREATE": {
+                "retained_events": 46477,
+                "retained_rows": 3818,
+                "rows": 3818,
+                "weight_sum": 3818
+              },
+              "PROCESS_FILE_DELETE": {
+                "retained_events": 10814,
+                "retained_rows": 2953,
+                "rows": 2953,
+                "weight_sum": 2953
+              },
+              "PROCESS_FILE_MODIFY": {
+                "retained_events": 191166,
+                "retained_rows": 7202,
+                "rows": 7202,
+                "weight_sum": 7202
+              },
+              "PROCESS_FILE_READ": {
+                "retained_events": 145254,
+                "retained_rows": 61860,
+                "rows": 61860,
+                "weight_sum": 61860
+              },
+              "PROCESS_FILE_RENAME": {
+                "retained_events": 19523,
+                "retained_rows": 909,
+                "rows": 909,
+                "weight_sum": 909
+              },
+              "PROCESS_FILE_WRITE": {
+                "retained_events": 115413,
+                "retained_rows": 5295,
+                "rows": 5295,
+                "weight_sum": 5295
+              },
+              "PROCESS_MODULE_LOAD": {
+                "retained_events": 236036,
+                "retained_rows": 221685,
+                "rows": 221685,
+                "weight_sum": 221685
+              },
+              "REV__PROCESS_CREATE_PROCESS": {
+                "retained_events": 7538,
+                "retained_rows": 7538,
+                "rows": 7538,
+                "weight_sum": 7538
+              },
+              "REV__PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 886594,
+                "retained_rows": 351,
+                "rows": 351,
+                "weight_sum": 351
+              },
+              "REV__PROCESS_DESTINATION_START": {
+                "retained_events": 2250826,
+                "retained_rows": 545,
+                "rows": 545,
+                "weight_sum": 545
+              },
+              "REV__PROCESS_FILE_CREATE": {
+                "retained_events": 46477,
+                "retained_rows": 3818,
+                "rows": 3818,
+                "weight_sum": 3818
+              },
+              "REV__PROCESS_FILE_DELETE": {
+                "retained_events": 10814,
+                "retained_rows": 2953,
+                "rows": 2953,
+                "weight_sum": 2953
+              },
+              "REV__PROCESS_FILE_MODIFY": {
+                "retained_events": 191166,
+                "retained_rows": 7202,
+                "rows": 7202,
+                "weight_sum": 7202
+              },
+              "REV__PROCESS_FILE_READ": {
+                "retained_events": 145254,
+                "retained_rows": 61860,
+                "rows": 61860,
+                "weight_sum": 61860
+              },
+              "REV__PROCESS_FILE_RENAME": {
+                "retained_events": 19523,
+                "retained_rows": 909,
+                "rows": 909,
+                "weight_sum": 909
+              },
+              "REV__PROCESS_FILE_WRITE": {
+                "retained_events": 115413,
+                "retained_rows": 5295,
+                "rows": 5295,
+                "weight_sum": 5295
+              },
+              "REV__PROCESS_MODULE_LOAD": {
+                "retained_events": 236036,
+                "retained_rows": 221685,
+                "rows": 221685,
+                "weight_sum": 221685
+              }
+            },
+            "retained_bidirectional_rows": 624312,
+            "retained_forward_rows": 312156
+          },
+          "metrics": {
+            "context_degree": {
+              "count": 15019,
+              "maximum": 7273,
+              "mean": 19.653771888940675,
+              "median": 2,
+              "minimum": 1,
+              "p90": 8,
+              "p95": 30,
+              "p99": 258,
+              "p99_5": 750.6199999999881,
+              "p99_9": 3719.9720000007983
+            },
+            "create_edge_count": 7538,
+            "create_families_bridged_by_shared_context": 715,
+            "create_topology_sha256": "91de9146292a8095797d7de6c456c92f405d4e01e89d1c23c46ecff39c041b0e",
+            "create_topology_unchanged": true,
+            "largest_component_process_count": 8253,
+            "largest_component_process_percent": 98.53151862464183,
+            "largest_process_component_count": 8253,
+            "neighborhoods": {
+              "definition": "Unique nodes at undirected distance <= radius, excluding self, including CREATE; not relation/event multiplicity",
+              "one_hop_all_processes": {
+                "count": 8376,
+                "maximum": 4452,
+                "mean": 37.04106972301815,
+                "median": 28,
+                "minimum": 0,
+                "p90": 57,
+                "p95": 77,
+                "p99": 248.25,
+                "p99_5": 289.25,
+                "p99_9": 693.5000000000655
+              },
+              "two_hop_method": "Deterministic SHA256 process_id sample, exact per seed; sampled quantiles are NOT population quantiles",
+              "two_hop_sample_size": 64,
+              "two_hop_sampled_all_node_count": {
+                "count": 64,
+                "maximum": 9505,
+                "mean": 7163.453125,
+                "median": 7484,
+                "minimum": 19,
+                "p90": 9210,
+                "p95": 9235.9,
+                "p99": 9367.029999999999,
+                "p99_5": 9436.015000000001,
+                "p99_9": 9491.203000000001
+              },
+              "two_hop_sampled_process_count": {
+                "count": 64,
+                "maximum": 7640,
+                "mean": 6529.078125,
+                "median": 7331,
+                "minimum": 1,
+                "p90": 7640,
+                "p95": 7640,
+                "p99": 7640,
+                "p99_5": 7640,
+                "p99_9": 7640
+              }
+            },
+            "process_count": 8376,
+            "relation_edge_counts": {
+              "PROCESS_CREATE_PROCESS": 7538,
+              "PROCESS_DESTINATION_MESSAGE": 351,
+              "PROCESS_DESTINATION_START": 545,
+              "PROCESS_FILE_CREATE": 3818,
+              "PROCESS_FILE_DELETE": 2953,
+              "PROCESS_FILE_MODIFY": 7202,
+              "PROCESS_FILE_READ": 61860,
+              "PROCESS_FILE_RENAME": 909,
+              "PROCESS_FILE_WRITE": 5295,
+              "PROCESS_MODULE_LOAD": 221685
+            },
+            "retained_context_counts": {
+              "DESTINATION": 357,
+              "FILE": 13249,
+              "MODULE": 1413
+            },
+            "retained_context_edge_count": 304618,
+            "retained_context_edges_percent": 100,
+            "retained_context_event_count": 3902103,
+            "retained_context_nodes_percent_by_type": {
+              "DESTINATION": 100,
+              "FILE": 100,
+              "MODULE": 100
+            },
+            "retained_cross_family_incidence_count": 36246,
+            "retained_distinct_family_context_incidence_count": 45940,
+            "retained_forward_edge_count": 312156,
+            "shared_context_count": 5325,
+            "weakly_connected_component_count": 124
+          },
+          "previous_audit_policy": "FULL_SHARED",
+          "reconciled": true
+        },
+        "MODULE_FAMILY_FREQ_1PCT": {
+          "bidirectional_stream_verification": {
+            "all_20_relation_counts_events_weights_reconciled": true,
+            "create_rows_retained_both_directions": 15076,
+            "forward_rows": 312156,
+            "per_relation": {
+              "PROCESS_CREATE_PROCESS": {
+                "retained_events": 7538,
+                "retained_rows": 7538,
+                "rows": 7538,
+                "weight_sum": 7538
+              },
+              "PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 886594,
+                "retained_rows": 351,
+                "rows": 351,
+                "weight_sum": 351
+              },
+              "PROCESS_DESTINATION_START": {
+                "retained_events": 2250826,
+                "retained_rows": 545,
+                "rows": 545,
+                "weight_sum": 545
+              },
+              "PROCESS_FILE_CREATE": {
+                "retained_events": 46477,
+                "retained_rows": 3818,
+                "rows": 3818,
+                "weight_sum": 3818
+              },
+              "PROCESS_FILE_DELETE": {
+                "retained_events": 10814,
+                "retained_rows": 2953,
+                "rows": 2953,
+                "weight_sum": 2953
+              },
+              "PROCESS_FILE_MODIFY": {
+                "retained_events": 191166,
+                "retained_rows": 7202,
+                "rows": 7202,
+                "weight_sum": 7202
+              },
+              "PROCESS_FILE_READ": {
+                "retained_events": 145254,
+                "retained_rows": 61860,
+                "rows": 61860,
+                "weight_sum": 61860
+              },
+              "PROCESS_FILE_RENAME": {
+                "retained_events": 19523,
+                "retained_rows": 909,
+                "rows": 909,
+                "weight_sum": 909
+              },
+              "PROCESS_FILE_WRITE": {
+                "retained_events": 115413,
+                "retained_rows": 5295,
+                "rows": 5295,
+                "weight_sum": 5295
+              },
+              "PROCESS_MODULE_LOAD": {
+                "retained_events": 36757,
+                "retained_rows": 32812,
+                "rows": 221685,
+                "weight_sum": 32812
+              },
+              "REV__PROCESS_CREATE_PROCESS": {
+                "retained_events": 7538,
+                "retained_rows": 7538,
+                "rows": 7538,
+                "weight_sum": 7538
+              },
+              "REV__PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 886594,
+                "retained_rows": 351,
+                "rows": 351,
+                "weight_sum": 351
+              },
+              "REV__PROCESS_DESTINATION_START": {
+                "retained_events": 2250826,
+                "retained_rows": 545,
+                "rows": 545,
+                "weight_sum": 545
+              },
+              "REV__PROCESS_FILE_CREATE": {
+                "retained_events": 46477,
+                "retained_rows": 3818,
+                "rows": 3818,
+                "weight_sum": 3818
+              },
+              "REV__PROCESS_FILE_DELETE": {
+                "retained_events": 10814,
+                "retained_rows": 2953,
+                "rows": 2953,
+                "weight_sum": 2953
+              },
+              "REV__PROCESS_FILE_MODIFY": {
+                "retained_events": 191166,
+                "retained_rows": 7202,
+                "rows": 7202,
+                "weight_sum": 7202
+              },
+              "REV__PROCESS_FILE_READ": {
+                "retained_events": 145254,
+                "retained_rows": 61860,
+                "rows": 61860,
+                "weight_sum": 61860
+              },
+              "REV__PROCESS_FILE_RENAME": {
+                "retained_events": 19523,
+                "retained_rows": 909,
+                "rows": 909,
+                "weight_sum": 909
+              },
+              "REV__PROCESS_FILE_WRITE": {
+                "retained_events": 115413,
+                "retained_rows": 5295,
+                "rows": 5295,
+                "weight_sum": 5295
+              },
+              "REV__PROCESS_MODULE_LOAD": {
+                "retained_events": 36757,
+                "retained_rows": 32812,
+                "rows": 221685,
+                "weight_sum": 32812
+              }
+            },
+            "retained_bidirectional_rows": 246566,
+            "retained_forward_rows": 123283
+          },
+          "metrics": {
+            "context_degree": {
+              "count": 14893,
+              "maximum": 1474,
+              "mean": 7.13805143355939,
+              "median": 2,
+              "minimum": 1,
+              "p90": 7,
+              "p95": 21,
+              "p99": 102,
+              "p99_5": 165.53999999999905,
+              "p99_9": 399.108000000002
+            },
+            "create_edge_count": 7538,
+            "create_families_bridged_by_shared_context": 425,
+            "create_topology_sha256": "91de9146292a8095797d7de6c456c92f405d4e01e89d1c23c46ecff39c041b0e",
+            "create_topology_unchanged": true,
+            "largest_component_process_count": 7963,
+            "largest_component_process_percent": 95.06924546322827,
+            "largest_process_component_count": 7963,
+            "neighborhoods": {
+              "definition": "Unique nodes at undirected distance <= radius, excluding self, including CREATE; not relation/event multiplicity",
+              "one_hop_all_processes": {
+                "count": 8376,
+                "maximum": 4452,
+                "mean": 14.491762177650429,
+                "median": 5,
+                "minimum": 0,
+                "p90": 18,
+                "p95": 32,
+                "p99": 198,
+                "p99_5": 265.125,
+                "p99_9": 655.87500000002
+              },
+              "two_hop_method": "Deterministic SHA256 process_id sample, exact per seed; sampled quantiles are NOT population quantiles",
+              "two_hop_sample_size": 64,
+              "two_hop_sampled_all_node_count": {
+                "count": 64,
+                "maximum": 3473,
+                "mean": 1360.5625,
+                "median": 1033,
+                "minimum": 2,
+                "p90": 2694.8,
+                "p95": 2976.049999999999,
+                "p99": 3241.159999999999,
+                "p99_5": 3357.080000000001,
+                "p99_9": 3449.8160000000016
+              },
+              "two_hop_sampled_process_count": {
+                "count": 64,
+                "maximum": 2061,
+                "mean": 768.46875,
+                "median": 579,
+                "minimum": 1,
+                "p90": 2061,
+                "p95": 2061,
+                "p99": 2061,
+                "p99_5": 2061,
+                "p99_9": 2061
+              }
+            },
+            "process_count": 8376,
+            "relation_edge_counts": {
+              "PROCESS_CREATE_PROCESS": 7538,
+              "PROCESS_DESTINATION_MESSAGE": 351,
+              "PROCESS_DESTINATION_START": 545,
+              "PROCESS_FILE_CREATE": 3818,
+              "PROCESS_FILE_DELETE": 2953,
+              "PROCESS_FILE_MODIFY": 7202,
+              "PROCESS_FILE_READ": 61860,
+              "PROCESS_FILE_RENAME": 909,
+              "PROCESS_FILE_WRITE": 5295,
+              "PROCESS_MODULE_LOAD": 32812
+            },
+            "retained_context_counts": {
+              "DESTINATION": 357,
+              "FILE": 13249,
+              "MODULE": 1287
+            },
+            "retained_context_edge_count": 115745,
+            "retained_context_edges_percent": 37.996769724704386,
+            "retained_context_event_count": 3702824,
+            "retained_context_nodes_percent_by_type": {
+              "DESTINATION": 100,
+              "FILE": 100,
+              "MODULE": 91.0828025477707
+            },
+            "retained_cross_family_incidence_count": 16338,
+            "retained_distinct_family_context_incidence_count": 26032,
+            "retained_forward_edge_count": 123283,
+            "shared_context_count": 5199,
+            "weakly_connected_component_count": 414
+          },
+          "previous_audit_policy": "MODULE_FAMILY_FREQ_GT_1PCT",
+          "reconciled": true
+        }
+      },
+      "unseen_context_count": 4546
+    },
+    "verified_benign": {
+      "policies": {
+        "ALL_TYPE_FAMILY_FREQ_5PCT": {
+          "bidirectional_stream_verification": {
+            "all_20_relation_counts_events_weights_reconciled": true,
+            "create_rows_retained_both_directions": 133108,
+            "forward_rows": 2746371,
+            "per_relation": {
+              "PROCESS_CREATE_PROCESS": {
+                "retained_events": 66554,
+                "retained_rows": 66554,
+                "rows": 66554,
+                "weight_sum": 66554
+              },
+              "PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 5561751,
+                "retained_rows": 3354,
+                "rows": 3354,
+                "weight_sum": 3354
+              },
+              "PROCESS_DESTINATION_START": {
+                "retained_events": 13059255,
+                "retained_rows": 2958,
+                "rows": 2958,
+                "weight_sum": 2958
+              },
+              "PROCESS_FILE_CREATE": {
+                "retained_events": 302397,
+                "retained_rows": 37677,
+                "rows": 37677,
+                "weight_sum": 37677
+              },
+              "PROCESS_FILE_DELETE": {
+                "retained_events": 92736,
+                "retained_rows": 27800,
+                "rows": 27800,
+                "weight_sum": 27800
+              },
+              "PROCESS_FILE_MODIFY": {
+                "retained_events": 1227733,
+                "retained_rows": 60353,
+                "rows": 60544,
+                "weight_sum": 60353
+              },
+              "PROCESS_FILE_READ": {
+                "retained_events": 1045590,
+                "retained_rows": 381730,
+                "rows": 582536,
+                "weight_sum": 381730
+              },
+              "PROCESS_FILE_RENAME": {
+                "retained_events": 118727,
+                "retained_rows": 7994,
+                "rows": 7994,
+                "weight_sum": 7994
+              },
+              "PROCESS_FILE_WRITE": {
+                "retained_events": 741807,
+                "retained_rows": 49467,
+                "rows": 49467,
+                "weight_sum": 49467
+              },
+              "PROCESS_MODULE_LOAD": {
+                "retained_events": 358255,
+                "retained_rows": 329531,
+                "rows": 1907487,
+                "weight_sum": 329531
+              },
+              "REV__PROCESS_CREATE_PROCESS": {
+                "retained_events": 66554,
+                "retained_rows": 66554,
+                "rows": 66554,
+                "weight_sum": 66554
+              },
+              "REV__PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 5561751,
+                "retained_rows": 3354,
+                "rows": 3354,
+                "weight_sum": 3354
+              },
+              "REV__PROCESS_DESTINATION_START": {
+                "retained_events": 13059255,
+                "retained_rows": 2958,
+                "rows": 2958,
+                "weight_sum": 2958
+              },
+              "REV__PROCESS_FILE_CREATE": {
+                "retained_events": 302397,
+                "retained_rows": 37677,
+                "rows": 37677,
+                "weight_sum": 37677
+              },
+              "REV__PROCESS_FILE_DELETE": {
+                "retained_events": 92736,
+                "retained_rows": 27800,
+                "rows": 27800,
+                "weight_sum": 27800
+              },
+              "REV__PROCESS_FILE_MODIFY": {
+                "retained_events": 1227733,
+                "retained_rows": 60353,
+                "rows": 60544,
+                "weight_sum": 60353
+              },
+              "REV__PROCESS_FILE_READ": {
+                "retained_events": 1045590,
+                "retained_rows": 381730,
+                "rows": 582536,
+                "weight_sum": 381730
+              },
+              "REV__PROCESS_FILE_RENAME": {
+                "retained_events": 118727,
+                "retained_rows": 7994,
+                "rows": 7994,
+                "weight_sum": 7994
+              },
+              "REV__PROCESS_FILE_WRITE": {
+                "retained_events": 741807,
+                "retained_rows": 49467,
+                "rows": 49467,
+                "weight_sum": 49467
+              },
+              "REV__PROCESS_MODULE_LOAD": {
+                "retained_events": 358255,
+                "retained_rows": 329531,
+                "rows": 1907487,
+                "weight_sum": 329531
+              }
+            },
+            "retained_bidirectional_rows": 1934836,
+            "retained_forward_rows": 967418
+          },
+          "metrics": {
+            "context_degree": {
+              "count": 58606,
+              "maximum": 9073,
+              "mean": 13.886035559499028,
+              "median": 2,
+              "minimum": 1,
+              "p90": 8,
+              "p95": 37,
+              "p99": 225,
+              "p99_5": 496.97499999999854,
+              "p99_9": 1231.7150000000693
+            },
+            "create_edge_count": 66554,
+            "create_families_bridged_by_shared_context": 1524,
+            "create_topology_sha256": "74c1152bf8b41c565d926690716d256806cabdd8754d29df45a9cf87d0a99190",
+            "create_topology_unchanged": true,
+            "largest_component_process_count": 67446,
+            "largest_component_process_percent": 94.50321568187869,
+            "largest_process_component_count": 67446,
+            "neighborhoods": {
+              "definition": "Unique nodes at undirected distance <= radius, excluding self, including CREATE; not relation/event multiplicity",
+              "one_hop_all_processes": {
+                "count": 71369,
+                "maximum": 14418,
+                "mean": 13.267847384718856,
+                "median": 3,
+                "minimum": 0,
+                "p90": 13,
+                "p95": 42,
+                "p99": 210,
+                "p99_5": 256,
+                "p99_9": 562.3200000001234
+              },
+              "two_hop_method": "Deterministic SHA256 process_id sample, exact per seed; sampled quantiles are NOT population quantiles",
+              "two_hop_sample_size": 64,
+              "two_hop_sampled_all_node_count": {
+                "count": 64,
+                "maximum": 12734,
+                "mean": 3930.625,
+                "median": 632,
+                "minimum": 0,
+                "p90": 10235,
+                "p95": 11466,
+                "p99": 12730.22,
+                "p99_5": 12732.11,
+                "p99_9": 12733.622
+              },
+              "two_hop_sampled_process_count": {
+                "count": 64,
+                "maximum": 12316,
+                "mean": 3422.78125,
+                "median": 515.5,
+                "minimum": 0,
+                "p90": 9556,
+                "p95": 10458,
+                "p99": 11942.409999999998,
+                "p99_5": 12129.205000000002,
+                "p99_9": 12278.641000000003
+              }
+            },
+            "process_count": 71369,
+            "relation_edge_counts": {
+              "PROCESS_CREATE_PROCESS": 66554,
+              "PROCESS_DESTINATION_MESSAGE": 3354,
+              "PROCESS_DESTINATION_START": 2958,
+              "PROCESS_FILE_CREATE": 37677,
+              "PROCESS_FILE_DELETE": 27800,
+              "PROCESS_FILE_MODIFY": 60353,
+              "PROCESS_FILE_READ": 381730,
+              "PROCESS_FILE_RENAME": 7994,
+              "PROCESS_FILE_WRITE": 49467,
+              "PROCESS_MODULE_LOAD": 329531
+            },
+            "retained_context_counts": {
+              "DESTINATION": 142,
+              "FILE": 55722,
+              "MODULE": 2742
+            },
+            "retained_context_edge_count": 900864,
+            "retained_context_edges_percent": 33.61662382170126,
+            "retained_context_event_count": 22508251,
+            "retained_context_nodes_percent_by_type": {
+              "DESTINATION": 100,
+              "FILE": 99.93543527386204,
+              "MODULE": 96.41350210970464
+            },
+            "retained_cross_family_incidence_count": 98312,
+            "retained_distinct_family_context_incidence_count": 121740,
+            "retained_forward_edge_count": 967418,
+            "shared_context_count": 35178,
+            "weakly_connected_component_count": 3292
+          },
+          "previous_audit_policy": "FAMILY_FREQ_GT_5PCT",
+          "reconciled": true
+        },
+        "DEGREE_WEIGHTED_FULL": {
+          "bidirectional_stream_verification": {
+            "all_20_relation_counts_events_weights_reconciled": true,
+            "create_rows_retained_both_directions": 133108,
+            "forward_rows": 2746371,
+            "per_relation": {
+              "PROCESS_CREATE_PROCESS": {
+                "retained_events": 66554,
+                "retained_rows": 66554,
+                "rows": 66554,
+                "weight_sum": 66554
+              },
+              "PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 5561751,
+                "retained_rows": 3354,
+                "rows": 3354,
+                "weight_sum": 2010.7270610719452
+              },
+              "PROCESS_DESTINATION_START": {
+                "retained_events": 13059255,
+                "retained_rows": 2958,
+                "rows": 2958,
+                "weight_sum": 1869.2233034143924
+              },
+              "PROCESS_FILE_CREATE": {
+                "retained_events": 302397,
+                "retained_rows": 37677,
+                "rows": 37677,
+                "weight_sum": 33142.04136276717
+              },
+              "PROCESS_FILE_DELETE": {
+                "retained_events": 92736,
+                "retained_rows": 27800,
+                "rows": 27800,
+                "weight_sum": 24358.442777830453
+              },
+              "PROCESS_FILE_MODIFY": {
+                "retained_events": 1234589,
+                "retained_rows": 60544,
+                "rows": 60544,
+                "weight_sum": 47992.2952571388
+              },
+              "PROCESS_FILE_READ": {
+                "retained_events": 1251529,
+                "retained_rows": 582536,
+                "rows": 582536,
+                "weight_sum": 248718.9277611487
+              },
+              "PROCESS_FILE_RENAME": {
+                "retained_events": 118727,
+                "retained_rows": 7994,
+                "rows": 7994,
+                "weight_sum": 7066.290683049521
+              },
+              "PROCESS_FILE_WRITE": {
+                "retained_events": 741807,
+                "retained_rows": 49467,
+                "rows": 49467,
+                "weight_sum": 37775.30003380999
+              },
+              "PROCESS_MODULE_LOAD": {
+                "retained_events": 2055968,
+                "retained_rows": 1907487,
+                "rows": 1907487,
+                "weight_sum": 298237.33015756484
+              },
+              "REV__PROCESS_CREATE_PROCESS": {
+                "retained_events": 66554,
+                "retained_rows": 66554,
+                "rows": 66554,
+                "weight_sum": 66554
+              },
+              "REV__PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 5561751,
+                "retained_rows": 3354,
+                "rows": 3354,
+                "weight_sum": 2010.7270610719452
+              },
+              "REV__PROCESS_DESTINATION_START": {
+                "retained_events": 13059255,
+                "retained_rows": 2958,
+                "rows": 2958,
+                "weight_sum": 1869.2233034143924
+              },
+              "REV__PROCESS_FILE_CREATE": {
+                "retained_events": 302397,
+                "retained_rows": 37677,
+                "rows": 37677,
+                "weight_sum": 33142.04136276717
+              },
+              "REV__PROCESS_FILE_DELETE": {
+                "retained_events": 92736,
+                "retained_rows": 27800,
+                "rows": 27800,
+                "weight_sum": 24358.442777830453
+              },
+              "REV__PROCESS_FILE_MODIFY": {
+                "retained_events": 1234589,
+                "retained_rows": 60544,
+                "rows": 60544,
+                "weight_sum": 47992.2952571388
+              },
+              "REV__PROCESS_FILE_READ": {
+                "retained_events": 1251529,
+                "retained_rows": 582536,
+                "rows": 582536,
+                "weight_sum": 248718.9277611487
+              },
+              "REV__PROCESS_FILE_RENAME": {
+                "retained_events": 118727,
+                "retained_rows": 7994,
+                "rows": 7994,
+                "weight_sum": 7066.290683049521
+              },
+              "REV__PROCESS_FILE_WRITE": {
+                "retained_events": 741807,
+                "retained_rows": 49467,
+                "rows": 49467,
+                "weight_sum": 37775.30003380999
+              },
+              "REV__PROCESS_MODULE_LOAD": {
+                "retained_events": 2055968,
+                "retained_rows": 1907487,
+                "rows": 1907487,
+                "weight_sum": 298237.33015756484
+              }
+            },
+            "retained_bidirectional_rows": 5492742,
+            "retained_forward_rows": 2746371
+          },
+          "metrics": {
+            "context_degree": {
+              "count": 58744,
+              "maximum": 63784,
+              "mean": 44.13516274002451,
+              "median": 2,
+              "minimum": 1,
+              "p90": 9,
+              "p95": 37,
+              "p99": 307.5699999999997,
+              "p99_5": 784.2799999999697,
+              "p99_9": 9073
+            },
+            "create_edge_count": 66554,
+            "create_families_bridged_by_shared_context": 4808,
+            "create_topology_sha256": "74c1152bf8b41c565d926690716d256806cabdd8754d29df45a9cf87d0a99190",
+            "create_topology_unchanged": true,
+            "largest_component_process_count": 71362,
+            "largest_component_process_percent": 99.99019181997787,
+            "largest_process_component_count": 71362,
+            "neighborhoods": {
+              "definition": "Unique nodes at undirected distance <= radius, excluding self, including CREATE; not relation/event multiplicity",
+              "one_hop_all_processes": {
+                "count": 71369,
+                "maximum": 14440,
+                "mean": 38.192828819235245,
+                "median": 28,
+                "minimum": 0,
+                "p90": 57,
+                "p95": 77,
+                "p99": 252,
+                "p99_5": 301,
+                "p99_9": 607.5280000000494
+              },
+              "two_hop_method": "Deterministic SHA256 process_id sample, exact per seed; sampled quantiles are NOT population quantiles",
+              "two_hop_sample_size": 64,
+              "two_hop_sampled_all_node_count": {
+                "count": 64,
+                "maximum": 66429,
+                "mean": 55444.078125,
+                "median": 64321,
+                "minimum": 20,
+                "p90": 65965,
+                "p95": 66055.3,
+                "p99": 66351.51,
+                "p99_5": 66390.255,
+                "p99_9": 66421.251
+              },
+              "two_hop_sampled_process_count": {
+                "count": 64,
+                "maximum": 64926,
+                "mean": 54895.1875,
+                "median": 64225,
+                "minimum": 1,
+                "p90": 64419,
+                "p95": 64849.549999999996,
+                "p99": 64926,
+                "p99_5": 64926,
+                "p99_9": 64926
+              }
+            },
+            "process_count": 71369,
+            "relation_edge_counts": {
+              "PROCESS_CREATE_PROCESS": 66554,
+              "PROCESS_DESTINATION_MESSAGE": 3354,
+              "PROCESS_DESTINATION_START": 2958,
+              "PROCESS_FILE_CREATE": 37677,
+              "PROCESS_FILE_DELETE": 27800,
+              "PROCESS_FILE_MODIFY": 60544,
+              "PROCESS_FILE_READ": 582536,
+              "PROCESS_FILE_RENAME": 7994,
+              "PROCESS_FILE_WRITE": 49467,
+              "PROCESS_MODULE_LOAD": 1907487
+            },
+            "retained_context_counts": {
+              "DESTINATION": 142,
+              "FILE": 55758,
+              "MODULE": 2844
+            },
+            "retained_context_edge_count": 2679817,
+            "retained_context_edges_percent": 100,
+            "retained_context_event_count": 24418759,
+            "retained_context_nodes_percent_by_type": {
+              "DESTINATION": 100,
+              "FILE": 100,
+              "MODULE": 100
+            },
+            "retained_cross_family_incidence_count": 273330,
+            "retained_distinct_family_context_incidence_count": 296758,
+            "retained_forward_edge_count": 2746371,
+            "shared_context_count": 35316,
+            "weakly_connected_component_count": 8,
+            "weight_exposure": {
+              "interpretation": "Static weighted incidence proxy, NOT learned messages or effective RGCN neighborhood; CREATE weights stay 1; weighted topology equals FULL_SHARED",
+              "raw_top_one_percent_context_incidence_mass_share_percent": 84.64397402529279,
+              "seen_in_training_context_count": 58744,
+              "training_derived_weight_kind": "degree",
+              "unseen_context_count": 0,
+              "weighted_context_incidence_mass_percent_of_full": 24.309834379227524,
+              "weighted_same_top_one_percent_incidence_mass_share_percent": 56.6421660490455,
+              "weighted_unique_context_neighbor_exposure_per_process": {
+                "count": 71369,
+                "maximum": 12441.340463435563,
+                "mean": 8.83121861858767,
+                "median": 3.2582727140739074,
+                "minimum": 0,
+                "p90": 10.502503383354536,
+                "p95": 20.717908480594108,
+                "p99": 110.8269444802254,
+                "p99_5": 141.16226065642,
+                "p99_9": 346.941477702562
+              },
+              "weights": {
+                "count": 58744,
+                "maximum": 0.937976919315389,
+                "mean": 0.8764689245882054,
+                "median": 0.9016957429356888,
+                "minimum": 0.010053977352236149,
+                "p90": 0.937976919315389,
+                "p95": 0.937976919315389,
+                "p99": 0.937976919315389,
+                "p99_5": 0.937976919315389,
+                "p99_9": 0.937976919315389
+              }
+            }
+          },
+          "previous_audit_policy": "WEIGHTED_FULL_DEGREE",
+          "reconciled": true
+        },
+        "FULL_SHARED": {
+          "bidirectional_stream_verification": {
+            "all_20_relation_counts_events_weights_reconciled": true,
+            "create_rows_retained_both_directions": 133108,
+            "forward_rows": 2746371,
+            "per_relation": {
+              "PROCESS_CREATE_PROCESS": {
+                "retained_events": 66554,
+                "retained_rows": 66554,
+                "rows": 66554,
+                "weight_sum": 66554
+              },
+              "PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 5561751,
+                "retained_rows": 3354,
+                "rows": 3354,
+                "weight_sum": 3354
+              },
+              "PROCESS_DESTINATION_START": {
+                "retained_events": 13059255,
+                "retained_rows": 2958,
+                "rows": 2958,
+                "weight_sum": 2958
+              },
+              "PROCESS_FILE_CREATE": {
+                "retained_events": 302397,
+                "retained_rows": 37677,
+                "rows": 37677,
+                "weight_sum": 37677
+              },
+              "PROCESS_FILE_DELETE": {
+                "retained_events": 92736,
+                "retained_rows": 27800,
+                "rows": 27800,
+                "weight_sum": 27800
+              },
+              "PROCESS_FILE_MODIFY": {
+                "retained_events": 1234589,
+                "retained_rows": 60544,
+                "rows": 60544,
+                "weight_sum": 60544
+              },
+              "PROCESS_FILE_READ": {
+                "retained_events": 1251529,
+                "retained_rows": 582536,
+                "rows": 582536,
+                "weight_sum": 582536
+              },
+              "PROCESS_FILE_RENAME": {
+                "retained_events": 118727,
+                "retained_rows": 7994,
+                "rows": 7994,
+                "weight_sum": 7994
+              },
+              "PROCESS_FILE_WRITE": {
+                "retained_events": 741807,
+                "retained_rows": 49467,
+                "rows": 49467,
+                "weight_sum": 49467
+              },
+              "PROCESS_MODULE_LOAD": {
+                "retained_events": 2055968,
+                "retained_rows": 1907487,
+                "rows": 1907487,
+                "weight_sum": 1907487
+              },
+              "REV__PROCESS_CREATE_PROCESS": {
+                "retained_events": 66554,
+                "retained_rows": 66554,
+                "rows": 66554,
+                "weight_sum": 66554
+              },
+              "REV__PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 5561751,
+                "retained_rows": 3354,
+                "rows": 3354,
+                "weight_sum": 3354
+              },
+              "REV__PROCESS_DESTINATION_START": {
+                "retained_events": 13059255,
+                "retained_rows": 2958,
+                "rows": 2958,
+                "weight_sum": 2958
+              },
+              "REV__PROCESS_FILE_CREATE": {
+                "retained_events": 302397,
+                "retained_rows": 37677,
+                "rows": 37677,
+                "weight_sum": 37677
+              },
+              "REV__PROCESS_FILE_DELETE": {
+                "retained_events": 92736,
+                "retained_rows": 27800,
+                "rows": 27800,
+                "weight_sum": 27800
+              },
+              "REV__PROCESS_FILE_MODIFY": {
+                "retained_events": 1234589,
+                "retained_rows": 60544,
+                "rows": 60544,
+                "weight_sum": 60544
+              },
+              "REV__PROCESS_FILE_READ": {
+                "retained_events": 1251529,
+                "retained_rows": 582536,
+                "rows": 582536,
+                "weight_sum": 582536
+              },
+              "REV__PROCESS_FILE_RENAME": {
+                "retained_events": 118727,
+                "retained_rows": 7994,
+                "rows": 7994,
+                "weight_sum": 7994
+              },
+              "REV__PROCESS_FILE_WRITE": {
+                "retained_events": 741807,
+                "retained_rows": 49467,
+                "rows": 49467,
+                "weight_sum": 49467
+              },
+              "REV__PROCESS_MODULE_LOAD": {
+                "retained_events": 2055968,
+                "retained_rows": 1907487,
+                "rows": 1907487,
+                "weight_sum": 1907487
+              }
+            },
+            "retained_bidirectional_rows": 5492742,
+            "retained_forward_rows": 2746371
+          },
+          "metrics": {
+            "context_degree": {
+              "count": 58744,
+              "maximum": 63784,
+              "mean": 44.13516274002451,
+              "median": 2,
+              "minimum": 1,
+              "p90": 9,
+              "p95": 37,
+              "p99": 307.5699999999997,
+              "p99_5": 784.2799999999697,
+              "p99_9": 9073
+            },
+            "create_edge_count": 66554,
+            "create_families_bridged_by_shared_context": 4808,
+            "create_topology_sha256": "74c1152bf8b41c565d926690716d256806cabdd8754d29df45a9cf87d0a99190",
+            "create_topology_unchanged": true,
+            "largest_component_process_count": 71362,
+            "largest_component_process_percent": 99.99019181997787,
+            "largest_process_component_count": 71362,
+            "neighborhoods": {
+              "definition": "Unique nodes at undirected distance <= radius, excluding self, including CREATE; not relation/event multiplicity",
+              "one_hop_all_processes": {
+                "count": 71369,
+                "maximum": 14440,
+                "mean": 38.192828819235245,
+                "median": 28,
+                "minimum": 0,
+                "p90": 57,
+                "p95": 77,
+                "p99": 252,
+                "p99_5": 301,
+                "p99_9": 607.5280000000494
+              },
+              "two_hop_method": "Deterministic SHA256 process_id sample, exact per seed; sampled quantiles are NOT population quantiles",
+              "two_hop_sample_size": 64,
+              "two_hop_sampled_all_node_count": {
+                "count": 64,
+                "maximum": 66429,
+                "mean": 55444.078125,
+                "median": 64321,
+                "minimum": 20,
+                "p90": 65965,
+                "p95": 66055.3,
+                "p99": 66351.51,
+                "p99_5": 66390.255,
+                "p99_9": 66421.251
+              },
+              "two_hop_sampled_process_count": {
+                "count": 64,
+                "maximum": 64926,
+                "mean": 54895.1875,
+                "median": 64225,
+                "minimum": 1,
+                "p90": 64419,
+                "p95": 64849.549999999996,
+                "p99": 64926,
+                "p99_5": 64926,
+                "p99_9": 64926
+              }
+            },
+            "process_count": 71369,
+            "relation_edge_counts": {
+              "PROCESS_CREATE_PROCESS": 66554,
+              "PROCESS_DESTINATION_MESSAGE": 3354,
+              "PROCESS_DESTINATION_START": 2958,
+              "PROCESS_FILE_CREATE": 37677,
+              "PROCESS_FILE_DELETE": 27800,
+              "PROCESS_FILE_MODIFY": 60544,
+              "PROCESS_FILE_READ": 582536,
+              "PROCESS_FILE_RENAME": 7994,
+              "PROCESS_FILE_WRITE": 49467,
+              "PROCESS_MODULE_LOAD": 1907487
+            },
+            "retained_context_counts": {
+              "DESTINATION": 142,
+              "FILE": 55758,
+              "MODULE": 2844
+            },
+            "retained_context_edge_count": 2679817,
+            "retained_context_edges_percent": 100,
+            "retained_context_event_count": 24418759,
+            "retained_context_nodes_percent_by_type": {
+              "DESTINATION": 100,
+              "FILE": 100,
+              "MODULE": 100
+            },
+            "retained_cross_family_incidence_count": 273330,
+            "retained_distinct_family_context_incidence_count": 296758,
+            "retained_forward_edge_count": 2746371,
+            "shared_context_count": 35316,
+            "weakly_connected_component_count": 8
+          },
+          "previous_audit_policy": "FULL_SHARED",
+          "reconciled": true
+        },
+        "MODULE_FAMILY_FREQ_1PCT": {
+          "bidirectional_stream_verification": {
+            "all_20_relation_counts_events_weights_reconciled": true,
+            "create_rows_retained_both_directions": 133108,
+            "forward_rows": 2746371,
+            "per_relation": {
+              "PROCESS_CREATE_PROCESS": {
+                "retained_events": 66554,
+                "retained_rows": 66554,
+                "rows": 66554,
+                "weight_sum": 66554
+              },
+              "PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 5561751,
+                "retained_rows": 3354,
+                "rows": 3354,
+                "weight_sum": 3354
+              },
+              "PROCESS_DESTINATION_START": {
+                "retained_events": 13059255,
+                "retained_rows": 2958,
+                "rows": 2958,
+                "weight_sum": 2958
+              },
+              "PROCESS_FILE_CREATE": {
+                "retained_events": 302397,
+                "retained_rows": 37677,
+                "rows": 37677,
+                "weight_sum": 37677
+              },
+              "PROCESS_FILE_DELETE": {
+                "retained_events": 92736,
+                "retained_rows": 27800,
+                "rows": 27800,
+                "weight_sum": 27800
+              },
+              "PROCESS_FILE_MODIFY": {
+                "retained_events": 1234589,
+                "retained_rows": 60544,
+                "rows": 60544,
+                "weight_sum": 60544
+              },
+              "PROCESS_FILE_READ": {
+                "retained_events": 1251529,
+                "retained_rows": 582536,
+                "rows": 582536,
+                "weight_sum": 582536
+              },
+              "PROCESS_FILE_RENAME": {
+                "retained_events": 118727,
+                "retained_rows": 7994,
+                "rows": 7994,
+                "weight_sum": 7994
+              },
+              "PROCESS_FILE_WRITE": {
+                "retained_events": 741807,
+                "retained_rows": 49467,
+                "rows": 49467,
+                "weight_sum": 49467
+              },
+              "PROCESS_MODULE_LOAD": {
+                "retained_events": 279240,
+                "retained_rows": 251499,
+                "rows": 1907487,
+                "weight_sum": 251499
+              },
+              "REV__PROCESS_CREATE_PROCESS": {
+                "retained_events": 66554,
+                "retained_rows": 66554,
+                "rows": 66554,
+                "weight_sum": 66554
+              },
+              "REV__PROCESS_DESTINATION_MESSAGE": {
+                "retained_events": 5561751,
+                "retained_rows": 3354,
+                "rows": 3354,
+                "weight_sum": 3354
+              },
+              "REV__PROCESS_DESTINATION_START": {
+                "retained_events": 13059255,
+                "retained_rows": 2958,
+                "rows": 2958,
+                "weight_sum": 2958
+              },
+              "REV__PROCESS_FILE_CREATE": {
+                "retained_events": 302397,
+                "retained_rows": 37677,
+                "rows": 37677,
+                "weight_sum": 37677
+              },
+              "REV__PROCESS_FILE_DELETE": {
+                "retained_events": 92736,
+                "retained_rows": 27800,
+                "rows": 27800,
+                "weight_sum": 27800
+              },
+              "REV__PROCESS_FILE_MODIFY": {
+                "retained_events": 1234589,
+                "retained_rows": 60544,
+                "rows": 60544,
+                "weight_sum": 60544
+              },
+              "REV__PROCESS_FILE_READ": {
+                "retained_events": 1251529,
+                "retained_rows": 582536,
+                "rows": 582536,
+                "weight_sum": 582536
+              },
+              "REV__PROCESS_FILE_RENAME": {
+                "retained_events": 118727,
+                "retained_rows": 7994,
+                "rows": 7994,
+                "weight_sum": 7994
+              },
+              "REV__PROCESS_FILE_WRITE": {
+                "retained_events": 741807,
+                "retained_rows": 49467,
+                "rows": 49467,
+                "weight_sum": 49467
+              },
+              "REV__PROCESS_MODULE_LOAD": {
+                "retained_events": 279240,
+                "retained_rows": 251499,
+                "rows": 1907487,
+                "weight_sum": 251499
+              }
+            },
+            "retained_bidirectional_rows": 2180766,
+            "retained_forward_rows": 1090383
+          },
+          "metrics": {
+            "context_degree": {
+              "count": 58618,
+              "maximum": 11458,
+              "mean": 15.979528472482855,
+              "median": 2,
+              "minimum": 1,
+              "p90": 8,
+              "p95": 37,
+              "p99": 228.83000000000175,
+              "p99_5": 514,
+              "p99_9": 1537.5760000006412
+            },
+            "create_edge_count": 66554,
+            "create_families_bridged_by_shared_context": 3557,
+            "create_topology_sha256": "74c1152bf8b41c565d926690716d256806cabdd8754d29df45a9cf87d0a99190",
+            "create_topology_unchanged": true,
+            "largest_component_process_count": 70106,
+            "largest_component_process_percent": 98.2303240902913,
+            "largest_process_component_count": 70106,
+            "neighborhoods": {
+              "definition": "Unique nodes at undirected distance <= radius, excluding self, including CREATE; not relation/event multiplicity",
+              "one_hop_all_processes": {
+                "count": 71369,
+                "maximum": 14440,
+                "mean": 14.989645364233771,
+                "median": 5,
+                "minimum": 0,
+                "p90": 18,
+                "p95": 34,
+                "p99": 204,
+                "p99_5": 250.1600000000035,
+                "p99_9": 568.6880000001111
+              },
+              "two_hop_method": "Deterministic SHA256 process_id sample, exact per seed; sampled quantiles are NOT population quantiles",
+              "two_hop_sample_size": 64,
+              "two_hop_sampled_all_node_count": {
+                "count": 64,
+                "maximum": 20584,
+                "mean": 5460.15625,
+                "median": 5959,
+                "minimum": 0,
+                "p90": 11637,
+                "p95": 12866.4,
+                "p99": 18081.00999999999,
+                "p99_5": 19332.50500000001,
+                "p99_9": 20333.70100000002
+              },
+              "two_hop_sampled_process_count": {
+                "count": 64,
+                "maximum": 20175,
+                "mean": 4951.359375,
+                "median": 5818,
+                "minimum": 0,
+                "p90": 11513,
+                "p95": 11543.9,
+                "p99": 17292.74999999999,
+                "p99_5": 18733.87500000001,
+                "p99_9": 19886.775000000023
+              }
+            },
+            "process_count": 71369,
+            "relation_edge_counts": {
+              "PROCESS_CREATE_PROCESS": 66554,
+              "PROCESS_DESTINATION_MESSAGE": 3354,
+              "PROCESS_DESTINATION_START": 2958,
+              "PROCESS_FILE_CREATE": 37677,
+              "PROCESS_FILE_DELETE": 27800,
+              "PROCESS_FILE_MODIFY": 60544,
+              "PROCESS_FILE_READ": 582536,
+              "PROCESS_FILE_RENAME": 7994,
+              "PROCESS_FILE_WRITE": 49467,
+              "PROCESS_MODULE_LOAD": 251499
+            },
+            "retained_context_counts": {
+              "DESTINATION": 142,
+              "FILE": 55758,
+              "MODULE": 2718
+            },
+            "retained_context_edge_count": 1023829,
+            "retained_context_edges_percent": 38.205183413643546,
+            "retained_context_event_count": 22642031,
+            "retained_context_nodes_percent_by_type": {
+              "DESTINATION": 100,
+              "FILE": 100,
+              "MODULE": 95.56962025316456
+            },
+            "retained_cross_family_incidence_count": 129418,
+            "retained_distinct_family_context_incidence_count": 152846,
+            "retained_forward_edge_count": 1090383,
+            "shared_context_count": 35190,
+            "weakly_connected_component_count": 1259
+          },
+          "previous_audit_policy": "MODULE_FAMILY_FREQ_GT_1PCT",
+          "reconciled": true
+        }
+      },
+      "unseen_context_count": 0
+    }
+  },
+  "policy_source_sha256": {
+    "/Users/farzu/Desktop/DARPA_OPTC_EDA/src/graph/audit_frozen_policies.py": "37d9e6c9e1244e7e3463152eea2a1a1c4d5a4ec19ad9a3e6102b300d5f05aae8",
+    "/Users/farzu/Desktop/DARPA_OPTC_EDA/src/graph/graph_policy.py": "3e98e0be4d718c8a0542ed3151c5c852ff43724a3e292dbcc71ffb080131bff0"
+  },
+  "previous_audit_sha256": "c1cdca309fcbffd586e40dcd4e246565695dee22e52636f8f4ab5b32e5ec0058",
+  "schema_version": "frozen_policy_reconciliation_v1",
+  "source_inventory": {
+    "evaluation": {
+      "graph_connectivity_audit.json": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1/graph_connectivity_audit.json",
+        "sha256": "408aea039e0e772a5278312f411b26b9d05a4abae5ad52e186d51f0d6ba3a148",
+        "size_bytes": 19355
+      },
+      "hetero_entity_nodes.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1/hetero_entity_nodes.parquet",
+        "row_count": 15019,
+        "sha256": "4b63d28f80143a0833c6eab61ed63bf80f9362a071a7f52db60a484200385a8e",
+        "size_bytes": 1378383
+      },
+      "hetero_graph_edges_bidirectional.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1/hetero_graph_edges_bidirectional.parquet",
+        "row_count": 624312,
+        "sha256": "7f96e65ed2e16f908e8837764bbabe51850334b6f15f48e647f3d6566d71cf4c",
+        "size_bytes": 54072018
+      },
+      "hetero_graph_edges_forward.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1/hetero_graph_edges_forward.parquet",
+        "row_count": 312156,
+        "sha256": "2845183ada28f3ca5e493ec0ff7ea0ea958a1e6f148027007a91c12126f2c8d9",
+        "size_bytes": 26740444
+      },
+      "hetero_process_nodes.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1/hetero_process_nodes.parquet",
+        "row_count": 8376,
+        "sha256": "1f1640499bb8077cbc4d4f218a16099a624c8feb9efab597b95a5c41cf4e93fd",
+        "size_bytes": 1302426
+      },
+      "relation_type_mapping.csv": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_evaluation_v1/relation_type_mapping.csv",
+        "sha256": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff",
+        "size_bytes": 941
+      }
+    },
+    "verified_benign": {
+      "graph_connectivity_audit.json": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/graph_connectivity_audit.json",
+        "sha256": "4102d179144e84005cfe01c7291c5f836294662524a181bd65b708f2a8c2d72e",
+        "size_bytes": 21291
+      },
+      "hetero_entity_nodes.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_entity_nodes.parquet",
+        "row_count": 58744,
+        "sha256": "365f0732c43af88e02043b3a48691372e16606a7816c9a49ddfcb175124ef0b6",
+        "size_bytes": 5229862
+      },
+      "hetero_graph_edges_bidirectional.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_graph_edges_bidirectional.parquet",
+        "row_count": 5492742,
+        "sha256": "49473185ab0402ac32a3878b31f0fd780ff48bfcd7f64f78f440d6cdc2e74a2d",
+        "size_bytes": 717601776
+      },
+      "hetero_graph_edges_forward.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_graph_edges_forward.parquet",
+        "row_count": 2746371,
+        "sha256": "8c59d3bac2511d78abd7052455eecafccbe434ea922f2cb853effb604c7e9d88",
+        "size_bytes": 355212816
+      },
+      "hetero_process_nodes.parquet": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/hetero_process_nodes.parquet",
+        "row_count": 71369,
+        "sha256": "5cefa50dd17cf359142ec83f672e725c036a76af85b9c2afe70bfa55b685c697",
+        "size_bytes": 10260680
+      },
+      "relation_type_mapping.csv": {
+        "path": "/Users/farzu/Desktop/DARPA_OPTC_EDA/data/local_runs/sysclient0201_hybrid_graph_v1/artifacts/eda_10_sysclient0201_hybrid_graph_verified_benign_v1/relation_type_mapping.csv",
+        "sha256": "bf2b5c74dfed4f52297ebf3ec503e1756257abba17e9f8ea5ef10aa8ca5029ff",
+        "size_bytes": 941
+      }
+    }
+  },
+  "status": "COMPLETE",
+  "timestamp_utc": "2026-10-03T18:41:08.719482+00:00"
+}
